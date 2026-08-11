@@ -14,7 +14,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-RUN python manage.py collectstatic --noinput
+# Ensure entrypoint is executable in the image (also set executable bit in git)
+RUN chmod +x /app/entrypoint.sh || true
 
 EXPOSE 8000
-CMD ["gunicorn", "config.asgi:application", "-k", "uvicorn.workers.UvicornWorker", "-b", "0.0.0.0:8000", "--workers", "2", "--log-level", "info"]
+
+# Use the entrypoint to run migrations, collectstatic, and start Daphne
+ENTRYPOINT ["/app/entrypoint.sh"]
