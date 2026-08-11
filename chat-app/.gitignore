@@ -13,6 +13,7 @@ ENV/
 
 # Django generated / runtime
 backend/.env
+backend/.env.example
 backend/db.sqlite3
 *.sqlite3
 backend/staticfiles/
