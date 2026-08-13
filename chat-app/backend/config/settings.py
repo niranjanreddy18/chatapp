@@ -107,10 +107,7 @@ ASGI_APPLICATION = 'config.routing.application'
 
 DATABASE_URL = config('DATABASE_URL', default=f'sqlite:///{str(BASE_DIR / "db.sqlite3")}')
 DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
-    }
+    "default": dj_database_url.parse(DATABASE_URL)
 }
 REDIS_URL = config('REDIS_URL', default='')
 if REDIS_URL:
