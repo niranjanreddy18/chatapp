@@ -17,4 +17,11 @@ application = get_asgi_application()
 
 from config.routing import application as channels_application
 
-application = channels_application
+async def application(scope, receive, send):
+    print(
+        "🔥 ASGI BOUNDARY REACHED:",
+        "type=", scope.get("type"),
+        "path=", scope.get("path"),
+    )
+
+    await channels_application(scope, receive, send)
