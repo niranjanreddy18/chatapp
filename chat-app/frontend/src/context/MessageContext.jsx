@@ -205,11 +205,19 @@ export function MessageProvider({ children }) {
       }
 
       if (payload.type === 'typing_start') {
+        // Ignore our own typing events — the backend broadcasts to the whole
+        // group including the sender, so we must filter them on the frontend.
+        // We compare by user_id (not username) because user_id is guaranteed
+        // unique across all members, including in group conversations.
+        if (payload.user_id === user?.id) return;
         setTypingUsers((current) => current.includes(payload.username) ? current : [...current, payload.username]);
         return;
       }
 
       if (payload.type === 'typing_stop') {
+        // Mirror the guard above: ignore stop events from ourselves so we
+        // don't accidentally clear another user's indicator.
+        if (payload.user_id === user?.id) return;
         setTypingUsers((current) => current.filter((name) => name !== payload.username));
         return;
       }
@@ -232,7 +240,7 @@ export function MessageProvider({ children }) {
       removeListener('status', handleStatus);
       removeListener('message', handleMessage);
     };
-  }, [selectedConversation?.id]);
+  }, [selectedConversation?.id, user]);
 
   const startTyping = () => {
     if (!selectedConversation?.id) return;
