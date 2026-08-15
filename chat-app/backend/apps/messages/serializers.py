@@ -76,6 +76,7 @@ class MessageSerializer(serializers.ModelSerializer):
     """
 
     sender_id       = serializers.IntegerField(source='sender.id', read_only=True)
+    conversation     = serializers.IntegerField(source='conversation_id', read_only=True)
     sender_username = serializers.CharField(source='sender.username', read_only=True)
     sender_avatar   = serializers.SerializerMethodField()
     attachments     = AttachmentSerializer(many=True, read_only=True)
@@ -84,6 +85,7 @@ class MessageSerializer(serializers.ModelSerializer):
     class Meta:
         model  = Message
         fields = (
+            'conversation',
             'id',
             'sender_id',
             'sender_username',
@@ -203,6 +205,7 @@ class ConversationMessageSerializer(serializers.ModelSerializer):
     """
 
     sender_id       = serializers.IntegerField(source='sender.id', read_only=True)
+    conversation     = serializers.IntegerField(source='conversation_id', read_only=True)
     sender_username = serializers.CharField(source='sender.username', read_only=True)
     sender_avatar   = serializers.SerializerMethodField()
     attachments     = AttachmentSerializer(many=True, read_only=True)
@@ -211,6 +214,7 @@ class ConversationMessageSerializer(serializers.ModelSerializer):
     class Meta:
         model  = Message
         fields = (
+            'conversation',
             'id',
             'sender_id',
             'sender_username',
