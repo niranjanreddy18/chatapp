@@ -170,7 +170,20 @@ export function MessageProvider({ children }) {
       const response = await api.post('/messages/upload/', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
-      return response?.data?.data;
+      const attachment = response?.data?.data;
+      if (attachment) {
+        // Merge the returned attachment into the parent message in state
+        setMessages((current) => current.map((message) => {
+          if (message.id === messageId) {
+            const existing = message.attachments || [];
+            // Avoid duplicates
+            const exists = existing.some((a) => a.id === attachment.id);
+            return exists ? message : { ...message, attachments: [...existing, attachment] };
+          }
+          return message;
+        }));
+      }
+      return attachment;
     } catch (err) {
       toast.error(err?.response?.data?.message || 'Upload failed.');
       throw err;

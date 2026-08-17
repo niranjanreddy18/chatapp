@@ -121,6 +121,12 @@ function ChatWindow() {
       return <img src={attachment.file_url} alt={attachment.file_name} className="mt-2 max-h-48 rounded-xl object-cover" />;
     }
 
+    if (attachment.file_type?.startsWith('video/')) {
+      return (
+        <video src={attachment.file_url} controls className="mt-2 max-h-48 rounded-xl" />
+      );
+    }
+
     return (
       <a href={attachment.file_url} target="_blank" rel="noreferrer" className="mt-2 inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">
         <Download size={14} /> {attachment.file_name}

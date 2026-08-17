@@ -28,6 +28,9 @@ from .serializers import (
     SendMessageSerializer,
     UpdateMessageSerializer,
 )
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
+import json
 
 
 # ---------------------------------------------------------------------------
@@ -288,4 +291,24 @@ class UploadAttachmentView(generics.GenericAPIView):
 
         attachment = services.upload_attachment(message=message, file=file)
         out        = AttachmentSerializer(attachment, context={'request': request})
+        # Broadcast updated message to the conversation group so other
+        # participants receive the new attachment in real-time.
+        try:
+            # Serialize the full message with request context so attachment
+            # file_url is absolute and accessible by clients.
+            serialized_message = MessageSerializer(message, context={'request': request}).data
+            payload = {
+                'type': 'new_message',
+                'message': serialized_message,
+            }
+            channel_layer = get_channel_layer()
+            group_name = f'chat_{message.conversation_id}'
+            async_to_sync(channel_layer.group_send)(group_name, {
+                'type': 'chat.message',
+                'payload': json.dumps(payload),
+            })
+        except Exception:
+            # Don't fail the upload if broadcasting fails; log could be added.
+            pass
+
         return _ok('File uploaded successfully.', out.data, status.HTTP_201_CREATED)
