@@ -167,9 +167,7 @@ export function MessageProvider({ children }) {
     formData.append('message_id', messageId);
     formData.append('file', file);
     try {
-      const response = await api.post('/messages/upload/', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
+      const response = await api.post('/messages/upload/', formData);
       const attachment = response?.data?.data;
       if (attachment) {
         // Merge the returned attachment into the parent message in state
