@@ -14,6 +14,7 @@ from datetime import timedelta
 from pathlib import Path
 import logging
 
+import cloudinary
 from decouple import config
 import dj_database_url
 
@@ -59,6 +60,8 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'cloudinary',
+    'cloudinary_storage',
     'channels',
     'rest_framework',
     'rest_framework_simplejwt',
@@ -167,6 +170,33 @@ STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
+
+# ---------------------------------------------------------------------------
+# Cloudinary — persistent media storage for chat attachments
+# Credentials are read exclusively from environment variables.
+# Never hardcode API keys here.
+# ---------------------------------------------------------------------------
+CLOUDINARY_STORAGE = {
+    'CLOUD_NAME': config('CLOUDINARY_CLOUD_NAME', default=''),
+    'API_KEY':    config('CLOUDINARY_API_KEY',    default=''),
+    'API_SECRET': config('CLOUDINARY_API_SECRET', default=''),
+    # Allow both image and video resources
+    'MEDIA_TAG':  'nexus_chat',
+}
+
+cloudinary.config(
+    cloud_name = CLOUDINARY_STORAGE['CLOUD_NAME'],
+    api_key    = CLOUDINARY_STORAGE['API_KEY'],
+    api_secret = CLOUDINARY_STORAGE['API_SECRET'],
+    secure     = True,
+)
+
+# ---------------------------------------------------------------------------
+# Upload size limits
+# Django's defaults are 2.5 MB which silently breaks large file uploads.
+# ---------------------------------------------------------------------------
+DATA_UPLOAD_MAX_MEMORY_SIZE = 50 * 1024 * 1024   # 50 MB total POST body
+FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024   # 10 MB in memory; larger → temp file
 
 SESSION_COOKIE_SECURE = config('SESSION_COOKIE_SECURE', default=True, cast=bool)
 CSRF_COOKIE_SECURE = config('CSRF_COOKIE_SECURE', default=True, cast=bool)

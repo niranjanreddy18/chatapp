@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.db import models
+from cloudinary_storage.storage import MediaCloudinaryStorage
 
 
 class Message(models.Model):
@@ -99,7 +100,10 @@ class Attachment(models.Model):
         on_delete=models.CASCADE,
         related_name='attachments',
     )
-    file        = models.FileField(upload_to='chat/')
+    file        = models.FileField(
+        upload_to='chat/',
+        storage=MediaCloudinaryStorage(),  # uploads go to Cloudinary, not local /media/
+    )
     file_name   = models.CharField(max_length=255)
     file_size   = models.PositiveBigIntegerField(help_text='File size in bytes')
     file_type   = models.CharField(max_length=100, help_text='MIME type, e.g. image/jpeg')

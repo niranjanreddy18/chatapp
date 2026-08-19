@@ -9,19 +9,12 @@ https://docs.djangoproject.com/en/5.0/howto/deployment/asgi/
 
 import os
 
-from django.core.asgi import get_asgi_application
-
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
 
-application = get_asgi_application()
+# Bootstrap Django apps/settings before importing anything that needs them.
+from django.core.asgi import get_asgi_application  # noqa: E402
+get_asgi_application()
 
-from config.routing import application as channels_application
-
-async def application(scope, receive, send):
-    print(
-        "🔥 ASGI BOUNDARY REACHED:",
-        "type=", scope.get("type"),
-        "path=", scope.get("path"),
-    )
-
-    await channels_application(scope, receive, send)
+# Import the Channels ProtocolTypeRouter that handles both HTTP and WebSocket.
+# This must come *after* the Django setup above.
+from config.routing import application  # noqa: E402, F401
