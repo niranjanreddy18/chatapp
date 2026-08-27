@@ -75,6 +75,23 @@ export function ConversationProvider({ children }) {
     }
   };
 
+  // ---------------------------------------------------------------------------
+  // NEW: Delete conversation — soft-removes the user's own membership.
+  // ---------------------------------------------------------------------------
+  const deleteConversation = async (conversationId) => {
+    try {
+      await api.delete(`/conversations/${conversationId}/delete/`);
+      // Immediately remove from local state
+      setConversations((current) => current.filter((item) => item.id !== conversationId));
+      setSelectedConversation((current) => (current?.id === conversationId ? null : current));
+      toast.success('Conversation removed.');
+    } catch (err) {
+      const message = err?.response?.data?.message || 'Unable to delete conversation.';
+      toast.error(message);
+      throw err;
+    }
+  };
+
   useEffect(() => {
     if (!isAuthenticated || !token) {
       setConversations([]);
@@ -88,6 +105,7 @@ export function ConversationProvider({ children }) {
     loadConversations();
   }, [isAuthenticated, token]);
 
+  // Presence updates (user_status events)
   useEffect(() => {
     const handlePresence = (payload) => {
       if (!payload || payload.type !== 'user_status') return;
@@ -104,6 +122,7 @@ export function ConversationProvider({ children }) {
     return () => removeListener('message', handlePresence);
   }, []);
 
+  // New conversation created by remote peer (via user_<id> WS group)
   useEffect(() => {
     const handleConversationCreated = (payload) => {
       if (payload?.type !== 'conversation_created' || !payload.conversation) return;
@@ -117,6 +136,24 @@ export function ConversationProvider({ children }) {
     return () => removeListener('message', handleConversationCreated);
   }, []);
 
+  // ---------------------------------------------------------------------------
+  // NEW: conversation_deleted — another member deleted the conversation (or the
+  // current user's deletion was confirmed by the WS broadcast). Remove it from
+  // the list and deselect it if it's currently open.
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    const handleConversationDeleted = (payload) => {
+      if (payload?.type !== 'conversation_deleted' || !payload.conversation_id) return;
+      const deletedId = Number(payload.conversation_id);
+      setConversations((current) => current.filter((item) => item.id !== deletedId));
+      setSelectedConversation((current) => (current?.id === deletedId ? null : current));
+    };
+
+    registerListener('message', handleConversationDeleted);
+    return () => removeListener('message', handleConversationDeleted);
+  }, []);
+
+  // Connect/disconnect WebSocket when the selected conversation changes
   useEffect(() => {
     if (!selectedConversation?.id || !isAuthenticated || !token) {
       disconnectSocket(true);
@@ -135,6 +172,7 @@ export function ConversationProvider({ children }) {
     refreshConversations,
     createConversation,
     createGroup,
+    deleteConversation,
     presenceMap,
     setPresenceMap,
   }), [conversations, selectedConversation, loading, error, presenceMap]);

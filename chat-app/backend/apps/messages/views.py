@@ -119,7 +119,7 @@ class ConversationMessagesView(generics.GenericAPIView):
     def get_queryset(self, conversation_id: int):
         return (
             Message.objects
-            .filter(conversation_id=conversation_id)
+            .filter(conversation_id=conversation_id, is_cleared=False)
             .select_related(
                 'sender',
                 'sender__profile',

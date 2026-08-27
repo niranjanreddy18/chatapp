@@ -49,8 +49,15 @@ class Message(models.Model):
     is_edited  = models.BooleanField(default=False)
     edited_at  = models.DateTimeField(null=True, blank=True)
 
-    # Soft delete
+    # Soft delete — individual message deletion. Row is kept; content is masked.
+    # The frontend displays "Message deleted" for these rows.
     is_deleted = models.BooleanField(default=False)
+
+    # Bulk clear — set by Clear Chat. Row is kept but excluded from all
+    # message-list queries so it never appears in the UI again.
+    # Unlike is_deleted, cleared messages produce NO placeholder — they are
+    # invisible to the API as if they never existed.
+    is_cleared = models.BooleanField(default=False, db_index=True)
 
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)

@@ -199,6 +199,24 @@ export function MessageProvider({ children }) {
     }
   };
 
+  // ---------------------------------------------------------------------------
+  // NEW: clearChat — bulk soft-deletes all messages in the conversation via
+  // REST, then empties the local message list immediately.
+  // ---------------------------------------------------------------------------
+  const clearChat = async (conversationId) => {
+    try {
+      await api.post(`/conversations/${conversationId}/clear/`);
+      setMessages([]);
+      toast.success('Chat cleared.');
+    } catch (err) {
+      toast.error(err?.response?.data?.message || 'Unable to clear chat.');
+      throw err;
+    }
+  };
+
+  // ---------------------------------------------------------------------------
+  // WebSocket message handler
+  // ---------------------------------------------------------------------------
   useEffect(() => {
     const handleStatus = (status) => setConnectionStatus(status);
     const handleMessage = (payload) => {
@@ -237,8 +255,6 @@ export function MessageProvider({ children }) {
       if (payload.type === 'typing_start') {
         // Ignore our own typing events — the backend broadcasts to the whole
         // group including the sender, so we must filter them on the frontend.
-        // We compare by user_id (not username) because user_id is guaranteed
-        // unique across all members, including in group conversations.
         const eventConversationId = Number(payload.conversation_id);
         const eventUserId = Number(payload.user_id);
         console.log('[TYPING HANDLER ENTERED]', payload);
@@ -293,6 +309,17 @@ export function MessageProvider({ children }) {
       if (payload.type === 'user_status') {
         return;
       }
+
+      // -----------------------------------------------------------------------
+      // NEW: chat_cleared — another user (or the same user in another tab)
+      // cleared all messages in this conversation.
+      // -----------------------------------------------------------------------
+      if (payload.type === 'chat_cleared') {
+        const eventConversationId = Number(payload.conversation_id);
+        if (eventConversationId !== Number(selectedConversation?.id)) return;
+        setMessages([]);
+        return;
+      }
     };
 
     registerListener('status', handleStatus);
@@ -336,6 +363,7 @@ export function MessageProvider({ children }) {
     sendMessageRest,
     editMessage,
     deleteMessage,
+    clearChat,
     uploadAttachment,
     scrollTargetRef,
     startTyping,

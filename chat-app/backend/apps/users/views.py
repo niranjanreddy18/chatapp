@@ -53,6 +53,29 @@ class UserListView(generics.ListAPIView):
 
     def get_queryset(self):
         queryset = User.objects.exclude(pk=self.request.user.pk)
+
+        # ?exclude_existing=true → exclude users who already have an active
+        # private conversation with the current user (used by "Start Chat" modal
+        # to show only users you haven't chatted with yet).
+        if self.request.query_params.get('exclude_existing', '').lower() == 'true':
+            from apps.chats.models import Conversation, ConversationMember
+            from django.db.models import Count, Q
+
+            # Find IDs of all private conversations the current user is in
+            existing_partner_ids = (
+                User.objects
+                .filter(
+                    conversation_memberships__conversation__conversation_type='PRIVATE',
+                    conversation_memberships__is_active=True,
+                    conversation_memberships__conversation__memberships__user=self.request.user,
+                    conversation_memberships__conversation__memberships__is_active=True,
+                )
+                .exclude(pk=self.request.user.pk)
+                .values_list('id', flat=True)
+                .distinct()
+            )
+            queryset = queryset.exclude(pk__in=existing_partner_ids)
+
         search = self.request.query_params.get('search', '').strip()
         if search:
             queryset = queryset.filter(Q(username__icontains=search))

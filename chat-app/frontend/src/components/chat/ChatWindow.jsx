@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
-import { SendHorizonal, Paperclip, ImagePlus, Reply, Pencil, Trash2, Download, MoreVertical, Wifi, WifiOff, LoaderCircle, Sparkles, X, RefreshCw } from 'lucide-react';
+import {
+  SendHorizonal, Paperclip, ImagePlus, Reply, Pencil, Trash2,
+  Download, MoreVertical, Wifi, WifiOff, LoaderCircle, Sparkles,
+  X, RefreshCw, Eraser, AlertTriangle,
+} from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useConversation } from '../../context/ConversationContext';
 import { useMessage } from '../../context/MessageContext';
@@ -8,26 +12,39 @@ import Avatar from '../common/Avatar';
 import Button from '../common/Button';
 import Input from '../common/Input';
 import EmptyState from '../common/EmptyState';
+import Modal from '../common/Modal';
 
 function ChatWindow() {
-  const { selectedConversation, presenceMap } = useConversation();
-  const { messages, loading, replyMessage, setReplyMessage, editingMessage, setEditingMessage, sendMessage, sendMessageRest, editMessage, deleteMessage, uploadAttachment, retryAttachment, scrollTargetRef, loadMessages, hasMore, page, typingUsers, connectionStatus, startTyping, stopTyping, markMessageRead } = useMessage();
+  const { selectedConversation, presenceMap, deleteConversation } = useConversation();
+  const {
+    messages, loading, replyMessage, setReplyMessage, editingMessage,
+    setEditingMessage, sendMessage, sendMessageRest, editMessage, deleteMessage,
+    uploadAttachment, retryAttachment, scrollTargetRef, loadMessages, hasMore,
+    page, typingUsers, connectionStatus, startTyping, stopTyping,
+    markMessageRead, clearChat,
+  } = useMessage();
+
   const [draft, setDraft] = useState('');
   const [isUploading, setIsUploading] = useState(false);
-  const [pendingFile, setPendingFile] = useState(null);  // { file: File, previewUrl: string }
+  const [pendingFile, setPendingFile] = useState(null);
+
+  // ---------- menu + confirmation state ----------
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef(null);
+
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const [isClearing, setIsClearing] = useState(false);
+
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  // -----------------------------------------------
+
   const textareaRef = useRef(null);
   const endRef = useRef(null);
   const typingStopTimerRef = useRef(null);
 
- console.log('[CHAT WINDOW TYPING USERS]', typingUsers);
+  console.log('[CHAT WINDOW CONVERSATION]', selectedConversation);
 
-console.log(
-  '[TYPING RENDER CHECK]',
-  typingUsers.length,
-  typingUsers.map(user => user.username)
-);
-
-console.log('[CHAT WINDOW CONVERSATION]', selectedConversation);
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages, selectedConversation?.id]);
@@ -43,20 +60,56 @@ console.log('[CHAT WINDOW CONVERSATION]', selectedConversation);
     window.clearTimeout(typingStopTimerRef.current);
   }, []);
 
+  // Close the dropdown menu when clicking outside
+  useEffect(() => {
+    if (!menuOpen) return;
+    const handleClickOutside = (e) => {
+      if (menuRef.current && !menuRef.current.contains(e.target)) {
+        setMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [menuOpen]);
+
   const { user } = useAuth();
   const currentUserId = user?.id;
+
+  // ---------- Clear Chat handler ----------
+  const handleClearChat = async () => {
+    if (isClearing || !selectedConversation?.id) return;
+    setIsClearing(true);
+    try {
+      await clearChat(selectedConversation.id);
+      setShowClearConfirm(false);
+    } catch {
+      // error already toasted inside clearChat
+    } finally {
+      setIsClearing(false);
+    }
+  };
+
+  // ---------- Delete Conversation handler ----------
+  const handleDeleteConversation = async () => {
+    if (isDeleting || !selectedConversation?.id) return;
+    setIsDeleting(true);
+    try {
+      await deleteConversation(selectedConversation.id);
+      setShowDeleteConfirm(false);
+      // selectedConversation is cleared inside deleteConversation — nothing else needed
+    } catch {
+      // error already toasted inside deleteConversation
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
   const handleSend = async () => {
     if (!draft.trim() && !pendingFile) return;
     const content = draft.trim() || pendingFile?.file.name;
     if (pendingFile) {
-      // With a file: immediately add an optimistic message with a blob-URL
-      // preview so the sender sees the image/video before Cloudinary responds.
       setIsUploading(true);
       const tempClientId = `temp-${Date.now()}`;
-      // Generate one idempotency key for this logical upload.  The same UUID is
-      // used for the first attempt AND every subsequent retry so the backend can
-      // return the already-committed Attachment instead of creating a new one.
       const uploadId = crypto.randomUUID();
       const optimisticAttachment = {
         id: tempClientId,
@@ -65,19 +118,12 @@ console.log('[CHAT WINDOW CONVERSATION]', selectedConversation);
         file_size: pendingFile.file.size,
         file_type: pendingFile.file.type,
         uploading: true,
-        // Keep the original File object on the attachment so the Retry button
-        // can pass it directly to uploadAttachment() without re-selecting.
-        // _localFile is a client-only field; it is never sent to the backend.
         _localFile: pendingFile.file,
-        // Keep the preview URL so we can revoke it at the right time.
         _previewUrl: pendingFile.previewUrl,
-        // Idempotency key — reused verbatim on every retry; never regenerated.
         _uploadId: uploadId,
       };
-      // Capture before clearing so values are available in the async closure.
       const capturedFile = pendingFile.file;
       const capturedPreviewUrl = pendingFile.previewUrl;
-      // Clear the compose-bar chip immediately so the user can start typing.
       setPendingFile(null);
       let uploadSucceeded = false;
       try {
@@ -97,19 +143,8 @@ console.log('[CHAT WINDOW CONVERSATION]', selectedConversation);
           uploadSucceeded = true;
         }
       } catch {
-        // Errors are already toasted inside sendMessageRest / uploadAttachment.
-        // If sendMessageRest threw, the optimistic message was removed from
-        // state, so we can safely revoke the preview URL now.
-        // If uploadAttachment threw, the attachment is marked upload_failed and
-        // _localFile is still live on the attachment for retry — do NOT revoke.
+        // Errors toasted inside sendMessageRest / uploadAttachment.
       } finally {
-        // Revoke the blob URL only when it is no longer needed:
-        //   (a) upload succeeded → Cloudinary URL now in state
-        //   (b) sendMessageRest failed → optimistic message removed from state
-        // When uploadAttachment fails we do NOT revoke: the image is still
-        // rendered (the browser keeps the decoded pixels) and the Retry button
-        // will re-use capturedFile, not the blob URL.  The URL on the
-        // attachment (_previewUrl) will be revoked in handleRetry on success.
         if (uploadSucceeded) {
           URL.revokeObjectURL(capturedPreviewUrl);
         }
@@ -123,12 +158,6 @@ console.log('[CHAT WINDOW CONVERSATION]', selectedConversation);
     setDraft('');
   };
 
-  // handleRetry — called by the Retry button rendered inside a failed attachment.
-  // Delegates to retryAttachment() in context which:
-  //   (1) flips the attachment back to uploading state (keeps _localFile/_previewUrl)
-  //   (2) calls POST /messages/upload/ — never POST /messages/
-  //   (3) returns true on success / false on failure
-  // Only blob URL revocation is handled here because _previewUrl is client-only.
   const handleRetry = async ({ messageId, attachment }) => {
     if (!attachment._localFile) {
       toast.error('Original file is no longer available. Please send the image again.');
@@ -153,7 +182,6 @@ console.log('[CHAT WINDOW CONVERSATION]', selectedConversation);
     if (event.target.value.trim()) {
       console.log('[TYPING HANDLE] calling startTyping', { draft: event.target.value });
       startTyping();
-      // NOTE: extended to 30s temporarily to rule out premature stop during debugging.
       typingStopTimerRef.current = window.setTimeout(() => {
         console.log('[TYPING HANDLE] 30s timeout fired — calling stopTyping');
         stopTyping();
@@ -172,8 +200,6 @@ console.log('[CHAT WINDOW CONVERSATION]', selectedConversation);
     setEditingMessage(null);
   };
 
-  // handleFileUpload — ONLY for the edit-message "Upload" button.
-  // It requires editingMessage to be set (i.e. a persisted message with a real ID).
   const handleFileUpload = async (event) => {
     const file = event.target.files?.[0];
     if (!file || !editingMessage) return;
@@ -187,21 +213,14 @@ console.log('[CHAT WINDOW CONVERSATION]', selectedConversation);
     }
   };
 
-  // handleNormalFileSelect — for the compose-bar attachment button.
-  // Stores { file, previewUrl } in pendingFile state so a local blob URL is
-  // ready the instant the user clicks Send — no Cloudinary round-trip needed.
   const handleNormalFileSelect = (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
-    // Create a local blob URL for the immediate optimistic preview.
     const previewUrl = URL.createObjectURL(file);
     setPendingFile({ file, previewUrl });
-    // Reset the input so selecting the same file again triggers onChange.
     event.target.value = '';
   };
 
-  // For a private conversation, find the other participant's user_id so we
-  // can look them up in the presenceMap that the WebSocket keeps updated.
   const otherParticipant = useMemo(() => {
     if (!selectedConversation || selectedConversation.conversation_type === 'GROUP') return null;
     return selectedConversation.members?.find((m) => m.user_id !== currentUserId) ?? null;
@@ -217,14 +236,6 @@ console.log('[CHAT WINDOW CONVERSATION]', selectedConversation);
     ? selectedConversation.name || 'Group'
     : otherParticipant?.username || selectedConversation.name || 'Conversation';
 
-  // ---------------------------------------------------------------------------
-  // renderMediaOverlay — shared overlay for images and videos during upload /
-  // after failure.  Renders:
-  //   • a spinner + dim when uploading: true
-  //   • an "Upload failed" label + Retry button when upload_failed: true
-  // The Retry button calls handleRetry() which reuses the existing messageId
-  // and the original File stored on attachment._localFile.
-  // ---------------------------------------------------------------------------
   const renderMediaOverlay = (attachment, messageId) => {
     if (attachment.uploading) {
       return (
@@ -250,12 +261,6 @@ console.log('[CHAT WINDOW CONVERSATION]', selectedConversation);
     return null;
   };
 
-  // ---------------------------------------------------------------------------
-  // renderAttachment — renders one attachment for a given message.
-  // Images and videos receive the uploading/failed overlay.
-  // Generic file links are unchanged.
-  // messageId is threaded through so handleRetry knows which message to target.
-  // ---------------------------------------------------------------------------
   const renderAttachment = (attachment, messageId) => {
     if (attachment.file_type?.startsWith('image/')) {
       return (
@@ -296,6 +301,7 @@ console.log('[CHAT WINDOW CONVERSATION]', selectedConversation);
 
   return (
     <div className="flex h-full flex-col overflow-hidden rounded-[32px] border border-slate-200/70 bg-white/90 shadow-[0_20px_70px_-35px_rgba(2,6,23,0.5)] dark:border-slate-800 dark:bg-slate-900/90">
+      {/* ── Header ──────────────────────────────────────────────────────── */}
       <header className="flex items-center justify-between border-b border-slate-200/70 px-4 py-4 dark:border-slate-800">
         <div className="flex items-center gap-3">
           <div className="relative">
@@ -314,12 +320,52 @@ console.log('[CHAT WINDOW CONVERSATION]', selectedConversation);
             {connectionStatus === 'connected' ? <Wifi size={14} className="text-emerald-500" /> : connectionStatus === 'connecting' || connectionStatus === 'reconnecting' ? <LoaderCircle size={14} className="animate-spin text-amber-500" /> : <WifiOff size={14} className="text-slate-500" />}
             {connectionStatus === 'connected' ? 'Connected' : connectionStatus === 'connecting' ? 'Connecting...' : connectionStatus === 'reconnecting' ? 'Reconnecting...' : 'Disconnected'}
           </div>
-          <Button variant="ghost" className="rounded-full p-2">
-            <MoreVertical size={16} />
-          </Button>
+
+          {/* ── ⋮ Actions menu ──────────────────────────────────────────── */}
+          <div className="relative" ref={menuRef}>
+            <button
+              id="chat-menu-btn"
+              onClick={() => setMenuOpen((prev) => !prev)}
+              className="rounded-full p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+              aria-label="More options"
+              aria-haspopup="true"
+              aria-expanded={menuOpen}
+            >
+              <MoreVertical size={16} />
+            </button>
+
+            {menuOpen && (
+              <div className="absolute right-0 top-full z-20 mt-1 min-w-[180px] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900">
+                {/* Clear Chat */}
+                <button
+                  id="clear-chat-menu-item"
+                  onClick={() => { setMenuOpen(false); setShowClearConfirm(true); }}
+                  className="flex w-full items-center gap-3 px-4 py-3 text-sm text-slate-700 transition hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800"
+                >
+                  <Eraser size={15} className="text-amber-500" />
+                  Clear Chat
+                </button>
+
+                {/* Divider */}
+                <div className="mx-3 border-t border-slate-100 dark:border-slate-800" />
+
+                {/* Delete Conversation */}
+                <button
+                  id="delete-conversation-menu-item"
+                  onClick={() => { setMenuOpen(false); setShowDeleteConfirm(true); }}
+                  className="flex w-full items-center gap-3 px-4 py-3 text-sm text-rose-600 transition hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-950/40"
+                >
+                  <Trash2 size={15} />
+                  Delete Conversation
+                </button>
+              </div>
+            )}
+          </div>
+          {/* ──────────────────────────────────────────────────────────── */}
         </div>
       </header>
 
+      {/* ── Message area ──────────────────────────────────────────────── */}
       <div className="flex-1 overflow-y-auto px-4 py-4">
         {hasMore && (
           <div className="mb-4 flex justify-center">
@@ -342,10 +388,6 @@ console.log('[CHAT WINDOW CONVERSATION]', selectedConversation);
         ) : messages.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-3">
             <EmptyState title="Start the conversation" description="Send the first message to begin this thread." icon={<Sparkles size={18} />} />
-            {/* DEBUG — remove after trace */}
-            <div style={{ fontSize: '11px', color: 'red', padding: '4px', background: 'rgba(255,0,0,0.05)', border: '1px dashed red' }}>
-              DEBUG typingUsers: {JSON.stringify(typingUsers)}
-            </div>
             {typingUsers.length > 0 && (
               <div className="flex rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
                 {typingUsers.map((typingUser) => typingUser.username).join(', ')} {typingUsers.length === 1 ? 'is' : 'are'} typing...
@@ -357,9 +399,6 @@ console.log('[CHAT WINDOW CONVERSATION]', selectedConversation);
             {messages.map((message) => {
               const isMine = message.sender_id === currentUserId;
               const showName = selectedConversation.conversation_type === 'GROUP' && !isMine;
-              // For media messages, 'Sent' must not appear until the Cloudinary
-              // upload succeeds.  Text messages have no mediaStatus field so the
-              // existing read_by → 'Seen' / 'Sent' logic is unchanged.
               const isMediaUploading = message.mediaStatus === 'uploading';
               const isMediaFailed   = message.mediaStatus === 'failed';
               return (
@@ -387,9 +426,6 @@ console.log('[CHAT WINDOW CONVERSATION]', selectedConversation);
                       {message.is_edited && <span>• edited</span>}
                       {isMine && (
                         <>
-                          {/* Show status label: uploading media → suppress 'Sent';
-                              failed media → suppress 'Sent' (Retry in the image);
-                              text messages or successfully uploaded media → Seen/Sent */}
                           {isMediaUploading && (
                             <span className="flex items-center gap-1">
                               <LoaderCircle size={10} className="animate-spin" />
@@ -413,10 +449,6 @@ console.log('[CHAT WINDOW CONVERSATION]', selectedConversation);
                 </div>
               );
             })}
-            {/* DEBUG — remove after trace */}
-            <div style={{ fontSize: '11px', color: 'red', padding: '4px', background: 'rgba(255,0,0,0.05)', border: '1px dashed red', marginTop: '8px' }}>
-              DEBUG typingUsers: {JSON.stringify(typingUsers)}
-            </div>
             {typingUsers.length > 0 && (
               <div className="mt-3 flex rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
                 {typingUsers.map((typingUser) => typingUser.username).join(', ')} {typingUsers.length === 1 ? 'is' : 'are'} typing...
@@ -428,6 +460,7 @@ console.log('[CHAT WINDOW CONVERSATION]', selectedConversation);
         )}
       </div>
 
+      {/* ── Compose bar ───────────────────────────────────────────────── */}
       <div className="border-t border-slate-200/70 p-4 dark:border-slate-800">
         {replyMessage && (
           <div className="mb-3 flex items-start justify-between rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800">
@@ -458,7 +491,6 @@ console.log('[CHAT WINDOW CONVERSATION]', selectedConversation);
 
         {!editingMessage && (
           <div className="flex flex-col gap-2">
-            {/* Pending-file chip: shown when user has selected a file but not yet sent */}
             {pendingFile && (
               <div className="flex items-center gap-2 rounded-2xl border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-sm">
                 <Paperclip size={14} className="shrink-0 text-sky-600 dark:text-sky-400" />
@@ -488,7 +520,7 @@ console.log('[CHAT WINDOW CONVERSATION]', selectedConversation);
                 value={draft}
                 onChange={handleTyping}
                 onKeyDown={handleKeyDown}
-              onBlur={() => { console.log('[TYPING HANDLE] textarea onBlur — calling stopTyping'); stopTyping(); }}
+                onBlur={() => { console.log('[TYPING HANDLE] textarea onBlur — calling stopTyping'); stopTyping(); }}
                 placeholder={pendingFile ? 'Add a message or just send the file…' : 'Message'}
                 rows={1}
                 className="max-h-36 min-h-[40px] flex-1 resize-none overflow-hidden border-0 bg-transparent px-2 py-2 text-sm text-slate-900 outline-none placeholder:text-slate-400 dark:text-slate-100"
@@ -500,6 +532,84 @@ console.log('[CHAT WINDOW CONVERSATION]', selectedConversation);
           </div>
         )}
       </div>
+
+      {/* ── Clear Chat Confirmation Modal ─────────────────────────────── */}
+      <Modal
+        open={showClearConfirm}
+        title="Clear Chat"
+        onClose={() => !isClearing && setShowClearConfirm(false)}
+      >
+        <div className="space-y-5">
+          <div className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-800/60 dark:bg-amber-950/30">
+            <AlertTriangle size={18} className="mt-0.5 shrink-0 text-amber-500" />
+            <p className="text-sm text-amber-800 dark:text-amber-300">
+              All messages in <strong>{conversationName}</strong> will be deleted for everyone.
+              This cannot be undone.
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <Button
+              id="confirm-clear-btn"
+              className="flex-1 gap-2 bg-amber-500 hover:bg-amber-600 focus:ring-amber-500"
+              disabled={isClearing}
+              onClick={handleClearChat}
+            >
+              {isClearing ? (
+                <><LoaderCircle size={15} className="animate-spin" /> Clearing…</>
+              ) : (
+                <><Eraser size={15} /> Clear Chat</>
+              )}
+            </Button>
+            <Button
+              variant="secondary"
+              disabled={isClearing}
+              onClick={() => setShowClearConfirm(false)}
+            >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* ── Delete Conversation Confirmation Modal ────────────────────── */}
+      <Modal
+        open={showDeleteConfirm}
+        title="Delete Conversation"
+        onClose={() => !isDeleting && setShowDeleteConfirm(false)}
+      >
+        <div className="space-y-5">
+          <div className="flex items-start gap-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 dark:border-rose-800/60 dark:bg-rose-950/30">
+            <AlertTriangle size={18} className="mt-0.5 shrink-0 text-rose-500" />
+            <p className="text-sm text-rose-800 dark:text-rose-300">
+              You will be removed from <strong>{conversationName}</strong>.
+              {selectedConversation.conversation_type === 'PRIVATE'
+                ? ' The other person will keep their message history.'
+                : ' Other group members will keep their access.'}
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <Button
+              id="confirm-delete-btn"
+              className="flex-1 gap-2 bg-rose-600 hover:bg-rose-700 focus:ring-rose-500"
+              disabled={isDeleting}
+              onClick={handleDeleteConversation}
+            >
+              {isDeleting ? (
+                <><LoaderCircle size={15} className="animate-spin" /> Removing…</>
+              ) : (
+                <><Trash2 size={15} /> Delete Conversation</>
+              )}
+            </Button>
+            <Button
+              variant="secondary"
+              disabled={isDeleting}
+              onClick={() => setShowDeleteConfirm(false)}
+            >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

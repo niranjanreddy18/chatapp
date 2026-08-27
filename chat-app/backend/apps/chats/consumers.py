@@ -165,6 +165,30 @@ class ChatConsumer(AsyncWebsocketConsumer):
             'conversation': event['conversation'],
         }))
 
+    async def conversation_deleted(self, event):
+        """
+        Fired when a member deletes (deactivates their membership in) a
+        conversation.  Forwards the event to the connected browser so the
+        frontend can remove the conversation from the list in real-time.
+        """
+        await self.send(text_data=json.dumps({
+            'type': 'conversation_deleted',
+            'conversation_id': event['conversation_id'],
+            'deleted_by': event['deleted_by'],
+        }))
+
+    async def chat_cleared(self, event):
+        """
+        Fired when any member clears all messages in a conversation.
+        Forwards the event to the connected browser so the frontend can
+        empty its message list in real-time.
+        """
+        await self.send(text_data=json.dumps({
+            'type': 'chat_cleared',
+            'conversation_id': event['conversation_id'],
+            'cleared_by': event['cleared_by'],
+        }))
+
     async def handle_typing_start(self):
         if getattr(self, 'is_typing', False):
             # Dedup guard: already broadcasting — no repeat needed

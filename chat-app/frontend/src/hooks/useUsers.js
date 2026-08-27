@@ -29,7 +29,10 @@ export function useUsers() {
     setError(null);
 
     try {
-      const response = await api.get('/users/');
+      // exclude_existing=true → backend filters out users who already have
+      // an active private conversation with the current user so the modal
+      // only shows people you haven't chatted with yet.
+      const response = await api.get('/users/?exclude_existing=true');
       setUsers(response?.data?.data || []);
     } catch {
       setError('Unable to load users.');

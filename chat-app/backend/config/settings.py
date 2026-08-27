@@ -38,6 +38,11 @@ cloudinary.config(
     api_key=config('CLOUDINARY_API_KEY'),
     api_secret=config('CLOUDINARY_API_SECRET'),
 )
+CLOUDINARY_STORAGE = {
+    'CLOUD_NAME': config('CLOUDINARY_CLOUD_NAME'),
+    'API_KEY': config('CLOUDINARY_API_KEY'),
+    'API_SECRET': config('CLOUDINARY_API_SECRET'),
+}
 print("Cloudinary cloud:", cloudinary.config().cloud_name)
 print("Cloudinary API key exists:", bool(cloudinary.config().api_key))
 print("Cloudinary API secret exists:", bool(cloudinary.config().api_secret))

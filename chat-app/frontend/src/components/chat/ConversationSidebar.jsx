@@ -419,10 +419,12 @@ function ConversationSidebar() {
                 </button>
               </div>
             ) : filteredUsers.length === 0 ? (
-              /* Empty — no users or no search match */
+              /* Empty — no eligible users or no search match */
               <div className="p-6 text-center text-sm text-slate-500 dark:text-slate-400">
                 {users.length === 0
-                  ? 'No other users are registered yet.'
+                  ? userSearch.trim()
+                    ? 'No users match your search.'
+                    : 'You already have conversations with everyone, or no other users are registered yet.'
                   : 'No users match your search.'}
               </div>
             ) : (

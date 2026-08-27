@@ -1,4 +1,5 @@
 from django.db import transaction
+from django.utils import timezone
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from django.contrib.auth import get_user_model
@@ -149,3 +150,154 @@ class ConversationDetailView(ConversationPermissionMixin, generics.RetrieveAPIVi
         if data is not None:
             payload['data'] = data
         return Response(payload, status=status_code)
+
+
+# ---------------------------------------------------------------------------
+# NEW: Delete Conversation
+# ---------------------------------------------------------------------------
+
+class DeleteConversationView(ConversationPermissionMixin, generics.GenericAPIView):
+    """
+    DELETE /api/conversations/<pk>/
+
+    Soft-removes the requesting user from the conversation by setting their
+    ConversationMember.is_active to False.  The Conversation row and all
+    messages are preserved so that other members keep their history.
+
+    After the DB commit a `conversation_deleted` WebSocket event is broadcast
+    to every client in `chat_<pk>` so their UIs update in real-time.
+
+    Permissions
+    -----------
+    - Must be authenticated.
+    - Must currently be an active member (ConversationPermissionMixin).
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, pk, *args, **kwargs):
+        conversation = self.get_queryset().filter(pk=pk).first()
+        if not conversation:
+            return self._err(
+                'Conversation not found or you are not a member.',
+                status.HTTP_404_NOT_FOUND,
+            )
+
+        with transaction.atomic():
+            updated = ConversationMember.objects.filter(
+                conversation=conversation,
+                user=request.user,
+                is_active=True,
+            ).update(is_active=False)
+
+        # Broadcast regardless of whether 'updated' is 0 (idempotent response).
+        if updated:
+            self._notify_deleted(pk, request.user.id)
+
+        return self._success_response(
+            'You have been removed from the conversation.',
+            status_code=status.HTTP_200_OK,
+        )
+
+    def _notify_deleted(self, conversation_id, user_id):
+        channel_layer = get_channel_layer()
+        if channel_layer is None:
+            return
+        try:
+            async_to_sync(channel_layer.group_send)(
+                f'chat_{conversation_id}',
+                {
+                    'type': 'conversation.deleted',
+                    'conversation_id': conversation_id,
+                    'deleted_by': user_id,
+                },
+            )
+        except Exception:
+            # WebSocket failure must never roll back the DB operation.
+            pass
+
+    def _success_response(self, message, data=None, status_code=status.HTTP_200_OK):
+        payload = {'success': True, 'message': message}
+        if data is not None:
+            payload['data'] = data
+        return Response(payload, status=status_code)
+
+    def _err(self, message, status_code=status.HTTP_400_BAD_REQUEST):
+        return Response({'success': False, 'message': message}, status=status_code)
+
+
+# ---------------------------------------------------------------------------
+# NEW: Clear Chat
+# ---------------------------------------------------------------------------
+
+class ClearChatView(ConversationPermissionMixin, generics.GenericAPIView):
+    """
+    POST /api/conversations/<pk>/clear/
+
+    Bulk soft-deletes all non-deleted messages in the conversation:
+        is_deleted = True
+        content    = DELETED_CONTENT  (same sentinel as soft_delete_message())
+
+    The conversation itself and all memberships are left untouched.
+
+    After the DB commit a `chat_cleared` WebSocket event is broadcast to
+    every client in `chat_<pk>` so their message lists clear in real-time.
+
+    Permissions
+    -----------
+    - Must be authenticated.
+    - Must currently be an active member.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk, *args, **kwargs):
+        conversation = self.get_queryset().filter(pk=pk).first()
+        if not conversation:
+            return self._err(
+                'Conversation not found or you are not a member.',
+                status.HTTP_404_NOT_FOUND,
+            )
+
+        with transaction.atomic():
+            from apps.messages.models import Message
+            cleared_count = Message.objects.filter(
+                conversation=conversation,
+                is_cleared=False,
+            ).update(
+                is_cleared=True,
+                updated_at=timezone.now(),
+            )
+
+        self._notify_cleared(pk, request.user.id)
+
+        return self._success_response(
+            'Chat cleared successfully.',
+            data={'cleared_count': cleared_count},
+            status_code=status.HTTP_200_OK,
+        )
+
+    def _notify_cleared(self, conversation_id, user_id):
+        channel_layer = get_channel_layer()
+        if channel_layer is None:
+            return
+        try:
+            async_to_sync(channel_layer.group_send)(
+                f'chat_{conversation_id}',
+                {
+                    'type': 'chat.cleared',
+                    'conversation_id': conversation_id,
+                    'cleared_by': user_id,
+                },
+            )
+        except Exception:
+            pass
+
+    def _success_response(self, message, data=None, status_code=status.HTTP_200_OK):
+        payload = {'success': True, 'message': message}
+        if data is not None:
+            payload['data'] = data
+        return Response(payload, status=status_code)
+
+    def _err(self, message, status_code=status.HTTP_400_BAD_REQUEST):
+        return Response({'success': False, 'message': message}, status=status_code)
