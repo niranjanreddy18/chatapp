@@ -1,4 +1,5 @@
 import json
+import logging
 from urllib.parse import parse_qs
 
 from channels.db import database_sync_to_async
@@ -14,6 +15,8 @@ from apps.messages.models import Message
 from apps.messages.serializers import MessageSerializer, SendMessageSerializer
 from apps.messages.services import mark_message_read
 from apps.users.models import Profile
+
+logger = logging.getLogger(__name__)
 
 
 class ChatConsumer(AsyncWebsocketConsumer):
@@ -37,9 +40,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
         self.user = user
         self.conversation_id = conversation_id
         self.room_group_name = f'chat_{conversation_id}'
+        self.user_group_name = f'user_{user.id}'
         self.is_typing = False
 
         await self.channel_layer.group_add(self.room_group_name, self.channel_name)
+        await self.channel_layer.group_add(self.user_group_name, self.channel_name)
         await self.accept()
         await self.update_presence(is_online=True)
 
@@ -48,6 +53,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
             if getattr(self, 'is_typing', False):
                 await self.typing_stop()
             await self.channel_layer.group_discard(self.room_group_name, self.channel_name)
+        if getattr(self, 'user_group_name', None):
+            await self.channel_layer.group_discard(self.user_group_name, self.channel_name)
         if getattr(self, 'user', None) is not None:
             await self.update_presence(is_online=False)
 
@@ -76,9 +83,23 @@ class ChatConsumer(AsyncWebsocketConsumer):
         if event_type == 'send_message':
             serializer = SendMessageSerializer(data=payload)
         elif event_type == 'typing_start':
+            print(
+                f'[TYPING BACKEND RECEIVED] type={event_type} '
+                f'conversation_id={self.conversation_id} '
+                f'user_id={self.user.id} username={self.user.username} '
+                f'is_typing_flag={getattr(self, "is_typing", False)}',
+                flush=True,
+            )
             await self.handle_typing_start()
             return
         elif event_type == 'typing_stop':
+            print(
+                f'[TYPING BACKEND RECEIVED] type={event_type} '
+                f'conversation_id={self.conversation_id} '
+                f'user_id={self.user.id} username={self.user.username} '
+                f'is_typing_flag={getattr(self, "is_typing", False)}',
+                flush=True,
+            )
             await self.handle_typing_stop()
             return
         elif event_type == 'read_message':
@@ -99,10 +120,18 @@ class ChatConsumer(AsyncWebsocketConsumer):
             return
 
         validated = serializer.validated_data
+        if validated['conversation_id'] != int(self.conversation_id):
+            await self.send(text_data=json.dumps({
+                'type': 'error',
+                'message': 'The message conversation does not match this socket.',
+            }))
+            return
+
         try:
             message = await self._create_message(
                 conversation_id=validated['conversation_id'],
                 content=validated['content'],
+                reply_to_id=validated.get('reply_to'),
             )
         except DRFValidationError as exc:
             await self.send(text_data=json.dumps({
@@ -130,14 +159,32 @@ class ChatConsumer(AsyncWebsocketConsumer):
     async def chat_message(self, event):
         await self.send(text_data=event['payload'])
 
+    async def conversation_created(self, event):
+        await self.send(text_data=json.dumps({
+            'type': 'conversation_created',
+            'conversation': event['conversation'],
+        }))
+
     async def handle_typing_start(self):
         if getattr(self, 'is_typing', False):
+            # Dedup guard: already broadcasting — no repeat needed
+            print(
+                f'[TYPING BACKEND] handle_typing_start SKIPPED (already typing) '
+                f'user_id={self.user.id}',
+                flush=True,
+            )
             return
         self.is_typing = True
         await self.typing_start()
 
     async def handle_typing_stop(self):
         if not getattr(self, 'is_typing', False):
+            # Dedup guard: was not typing — no stop needed
+            print(
+                f'[TYPING BACKEND] handle_typing_stop SKIPPED (not typing) '
+                f'user_id={self.user.id}',
+                flush=True,
+            )
             return
         self.is_typing = False
         await self.typing_stop()
@@ -145,9 +192,16 @@ class ChatConsumer(AsyncWebsocketConsumer):
     async def typing_start(self):
         payload = json.dumps({
             'type': 'typing_start',
+            'conversation_id': self.conversation_id,
             'user_id': self.user.id,
             'username': self.user.username,
         })
+        print(
+            f'[TYPING BACKEND BROADCAST] type=typing_start '
+            f'conversation_id={self.conversation_id} user_id={self.user.id} '
+            f'username={self.user.username} group={self.room_group_name}',
+            flush=True,
+        )
         await self.channel_layer.group_send(self.room_group_name, {
             'type': 'chat.message',
             'payload': payload,
@@ -156,9 +210,16 @@ class ChatConsumer(AsyncWebsocketConsumer):
     async def typing_stop(self):
         payload = json.dumps({
             'type': 'typing_stop',
+            'conversation_id': self.conversation_id,
             'user_id': self.user.id,
-            'username': self.user.username,  # must match typing_start so frontend filter works
+            'username': self.user.username,
         })
+        print(
+            f'[TYPING BACKEND BROADCAST] type=typing_stop '
+            f'conversation_id={self.conversation_id} user_id={self.user.id} '
+            f'username={self.user.username} group={self.room_group_name}',
+            flush=True,
+        )
         await self.channel_layer.group_send(self.room_group_name, {
             'type': 'chat.message',
             'payload': payload,
@@ -292,8 +353,12 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
         return mark_message_read(user=self.user, message_id=message_id)
 
-    async def _create_message(self, *, conversation_id: int, content: str) -> Message:
-        return await database_sync_to_async(self._create_message_sync)(conversation_id=conversation_id, content=content)
+    async def _create_message(self, *, conversation_id: int, content: str, reply_to_id: int | None) -> Message:
+        return await database_sync_to_async(self._create_message_sync)(
+            conversation_id=conversation_id,
+            content=content,
+            reply_to_id=reply_to_id,
+        )
 
     async def _serialize_message(self, message: Message):
         return await database_sync_to_async(self._serialize_message_sync)(message)
@@ -302,12 +367,13 @@ class ChatConsumer(AsyncWebsocketConsumer):
         serializer = MessageSerializer(message, context={'request': None})
         return serializer.data
 
-    def _create_message_sync(self, *, conversation_id: int, content: str) -> Message:
+    def _create_message_sync(self, *, conversation_id: int, content: str, reply_to_id: int | None) -> Message:
         try:
             return message_services.send_message(
                 user=self.user,
                 conversation_id=conversation_id,
                 content=content,
+                reply_to_id=reply_to_id,
             )
         except DRFValidationError:
             raise

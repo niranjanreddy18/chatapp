@@ -45,6 +45,7 @@ class AttachmentSerializer(serializers.ModelSerializer):
         model  = Attachment
         fields = (
             'id',
+            'upload_id',
             'file_url',
             'file_name',
             'file_size',

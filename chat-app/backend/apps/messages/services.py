@@ -149,12 +149,32 @@ def soft_delete_message(*, message: Message) -> Message:
 # ---------------------------------------------------------------------------
 
 @transaction.atomic
-def upload_attachment(*, message: Message, file) -> Attachment:
+def upload_attachment(*, message: Message, file, upload_id: str | None = None) -> Attachment:
     """
     Validate the uploaded file's MIME type and create an Attachment record.
 
-    The physical file is saved to media/chat/ via Django's FileField.
+    The physical file is saved to Cloudinary via MediaCloudinaryStorage.
+
+    Idempotency
+    -----------
+    When *upload_id* is provided (a UUID v4 generated once per logical upload
+    on the client), this function first checks whether an Attachment with that
+    key already exists.  If it does, the existing row is returned immediately —
+    no file data is read, Cloudinary is not contacted, and no new DB row is
+    written.  This makes the operation safe to retry: a client whose first
+    request timed out before the HTTP 201 response arrived will receive the
+    same Attachment on its next attempt, preventing duplicate DB rows and
+    duplicate Cloudinary assets.
+
+    If *upload_id* is absent (e.g. the edit-message upload path) the function
+    behaves exactly as before: validate → Cloudinary → INSERT.
     """
+    if upload_id:
+        try:
+            return Attachment.objects.get(upload_id=upload_id)
+        except Attachment.DoesNotExist:
+            pass   # first attempt — fall through to create
+
     content_type = getattr(file, 'content_type', '')
     if content_type not in ALLOWED_MIME_TYPES:
         raise ValidationError({
@@ -170,5 +190,7 @@ def upload_attachment(*, message: Message, file) -> Attachment:
         file_name=file.name,
         file_size=file.size,
         file_type=content_type,
+        upload_id=upload_id,   # None for legacy paths; UUID for compose-bar path
     )
     return attachment
+

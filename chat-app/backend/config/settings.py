@@ -14,10 +14,9 @@ from datetime import timedelta
 from pathlib import Path
 import logging
 
-import cloudinary
 from decouple import config
 import dj_database_url
-
+import cloudinary
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -34,7 +33,14 @@ def is_warning(record):
 def is_error(record):
     return record.levelno >= logging.ERROR
 
-
+cloudinary.config(
+    cloud_name=config('CLOUDINARY_CLOUD_NAME'),
+    api_key=config('CLOUDINARY_API_KEY'),
+    api_secret=config('CLOUDINARY_API_SECRET'),
+)
+print("Cloudinary cloud:", cloudinary.config().cloud_name)
+print("Cloudinary API key exists:", bool(cloudinary.config().api_key))
+print("Cloudinary API secret exists:", bool(cloudinary.config().api_secret))
 SECRET_KEY = config('SECRET_KEY', default='django-insecure-change-me')
 DEBUG = config('DEBUG', default=False, cast=bool)
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='localhost,127.0.0.1, 10.176.61.140', cast=lambda v: [s.strip() for s in v.split(',') if s.strip()])
@@ -60,8 +66,6 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'cloudinary',
-    'cloudinary_storage',
     'channels',
     'rest_framework',
     'rest_framework_simplejwt',
@@ -73,6 +77,7 @@ INSTALLED_APPS = [
     'apps.messages',
     'apps.notifications',
     'apps.common',
+    'cloudinary',
 ]
 
 MIDDLEWARE = [
@@ -170,33 +175,6 @@ STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
-
-# ---------------------------------------------------------------------------
-# Cloudinary — persistent media storage for chat attachments
-# Credentials are read exclusively from environment variables.
-# Never hardcode API keys here.
-# ---------------------------------------------------------------------------
-CLOUDINARY_STORAGE = {
-    'CLOUD_NAME': config('CLOUDINARY_CLOUD_NAME', default=''),
-    'API_KEY':    config('CLOUDINARY_API_KEY',    default=''),
-    'API_SECRET': config('CLOUDINARY_API_SECRET', default=''),
-    # Allow both image and video resources
-    'MEDIA_TAG':  'nexus_chat',
-}
-
-cloudinary.config(
-    cloud_name = CLOUDINARY_STORAGE['CLOUD_NAME'],
-    api_key    = CLOUDINARY_STORAGE['API_KEY'],
-    api_secret = CLOUDINARY_STORAGE['API_SECRET'],
-    secure     = True,
-)
-
-# ---------------------------------------------------------------------------
-# Upload size limits
-# Django's defaults are 2.5 MB which silently breaks large file uploads.
-# ---------------------------------------------------------------------------
-DATA_UPLOAD_MAX_MEMORY_SIZE = 50 * 1024 * 1024   # 50 MB total POST body
-FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024   # 10 MB in memory; larger → temp file
 
 SESSION_COOKIE_SECURE = config('SESSION_COOKIE_SECURE', default=True, cast=bool)
 CSRF_COOKIE_SECURE = config('CSRF_COOKIE_SECURE', default=True, cast=bool)

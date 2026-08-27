@@ -108,6 +108,17 @@ class Attachment(models.Model):
     file_size   = models.PositiveBigIntegerField(help_text='File size in bytes')
     file_type   = models.CharField(max_length=100, help_text='MIME type, e.g. image/jpeg')
     uploaded_at = models.DateTimeField(auto_now_add=True)
+    upload_id   = models.UUIDField(
+        unique=True,
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text=(
+            'Client-generated idempotency key (UUID v4). '
+            'When present, a retry with the same upload_id returns the existing '
+            'Attachment without creating a duplicate or re-uploading to Cloudinary.'
+        ),
+    )
 
     class Meta:
         app_label = 'chat_messages'

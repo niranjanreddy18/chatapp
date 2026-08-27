@@ -13,8 +13,8 @@ class AuthAPITests(APITestCase):
             {
                 'username': 'tester',
                 'email': 'tester@example.com',
-                'password': 'strongpassword',
-                'confirm_password': 'strongpassword',
+                'password': 'A7!giraffe-breeze',
+                'confirm_password': 'A7!giraffe-breeze',
             },
             format='json',
         )
@@ -27,14 +27,14 @@ class AuthAPITests(APITestCase):
         User.objects.create_user(
             username='loginer',
             email='loginer@example.com',
-            password='strongpassword',
+            password='A7!giraffe-breeze',
         )
 
         response = self.client.post(
             reverse('accounts:login'),
             {
                 'username_or_email': 'loginer',
-                'password': 'strongpassword',
+                'password': 'A7!giraffe-breeze',
             },
             format='json',
         )
@@ -43,3 +43,17 @@ class AuthAPITests(APITestCase):
         self.assertTrue(response.data['success'])
         self.assertIn('access', response.data['data'])
         self.assertIn('refresh', response.data['data'])
+
+    def test_register_rejects_django_invalid_passwords(self):
+        base = {'username': 'alex', 'email': 'alex@example.com', 'confirm_password': 'alex12345'}
+        for password in ('short', 'password', 'alex12345'):
+            payload = {**base, 'password': password, 'confirm_password': password}
+            response = self.client.post(reverse('accounts:register'), payload, format='json')
+            self.assertEqual(response.status_code, 400)
+
+    def test_register_rejects_mismatched_confirmation(self):
+        response = self.client.post(reverse('accounts:register'), {
+            'username': 'different', 'email': 'different@example.com',
+            'password': 'Correct-Horse-9', 'confirm_password': 'not-the-same',
+        }, format='json')
+        self.assertEqual(response.status_code, 400)

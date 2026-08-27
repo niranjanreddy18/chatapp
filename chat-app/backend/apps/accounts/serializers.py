@@ -1,4 +1,5 @@
 from django.contrib.auth import get_user_model
+from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
 
 User = get_user_model()
@@ -26,17 +27,17 @@ class RegisterSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError('Email is already registered.')
         return value
 
-    def validate_password(self, value):
-        if len(value) < 8:
-            raise serializers.ValidationError('Password must be at least 8 characters long.')
-        return value
-
     def validate(self, attrs):
         password = attrs.get('password')
         confirm_password = attrs.get('confirm_password')
 
         if password != confirm_password:
             raise serializers.ValidationError({'confirm_password': 'Passwords do not match.'})
+
+        # Give Django the pending user attributes so its configured validators
+        # can reject passwords similar to the username or email as well.
+        user = User(username=attrs.get('username'), email=attrs.get('email'))
+        validate_password(password, user=user)
 
         return attrs
 

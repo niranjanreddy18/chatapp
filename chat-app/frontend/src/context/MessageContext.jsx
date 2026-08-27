@@ -19,20 +19,31 @@ export function MessageProvider({ children }) {
   const [typingUsers, setTypingUsers] = useState([]);
   const [connectionStatus, setConnectionStatus] = useState('disconnected');
   const scrollTargetRef = useRef(null);
+  const selectedConversationIdRef = useRef(null);
 
-  const loadMessages = async (nextPage = 1, append = false) => {
+  // Keep async REST responses tied to the conversation that requested them.
+  // A request from a previously selected conversation must never replace the
+  // messages for the conversation currently displayed.
+  selectedConversationIdRef.current = selectedConversation?.id ?? null;
+
+  const loadMessages = async (nextPage = 1, _append = false) => {
     if (!selectedConversation?.id || !isAuthenticated || !token) return;
+    const requestedConversationId = selectedConversation.id;
     try {
       setLoading(true);
-      const response = await api.get(`/messages/${selectedConversation.id}/?page=${nextPage}`);
+      const response = await api.get(`/messages/${requestedConversationId}/?page=${nextPage}`);
       // Pagination envelope: { success, message, data: { count, next, previous, results } }
       const pageData = response?.data?.data || {};
       const payload = pageData.results || [];
-      if (append) {
-        setMessages((current) => [...payload, ...current]);
-      } else {
-        setMessages(payload);
-      }
+      if (Number(selectedConversationIdRef.current) !== Number(requestedConversationId)) return;
+
+      setMessages((current) => {
+        // A new_message event can arrive while this REST request is in flight.
+        // Merge rather than replace so the newer socket message is retained.
+        const byId = new Map(current.map((message) => [message.id, message]));
+        payload.forEach((message) => byId.set(message.id, message));
+        return [...byId.values()].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+      });
       setPage(nextPage);
       setHasMore(Boolean(pageData.next));
     } catch (err) {
@@ -192,19 +203,27 @@ export function MessageProvider({ children }) {
     const handleStatus = (status) => setConnectionStatus(status);
     const handleMessage = (payload) => {
       if (!payload || typeof payload !== 'object') return;
+      console.log('[MESSAGE CONTEXT EVENT]', payload);
+      console.log('[MESSAGE CONTEXT TYPE]', payload.type);
 
       if (payload.type === 'new_message') {
         const incoming = payload.message;
-        if (!incoming || !selectedConversation?.id || incoming.conversation !== selectedConversation.id) return;
+        const incomingConversationId = Number(incoming?.conversation);
+        const activeConversationId = Number(selectedConversation?.id);
+        if (!incoming || !Number.isFinite(incomingConversationId) || incomingConversationId !== activeConversationId) return;
         setMessages((current) => {
-          const exists = current.some((item) => item.id === incoming.id || item.tempClientId === incoming.tempClientId);
+          const optimisticMatch = current.find((item) => (
+            item.tempClientId
+            && Number(item.conversation) === incomingConversationId
+            && item.sender_id === incoming.sender_id
+            && item.content === incoming.content
+          ));
+          const exists = current.some((item) => item.id === incoming.id);
           if (exists) {
-            return current.map((item) => {
-              if (item.tempClientId && item.content === incoming.content && item.sender_id === incoming.sender_id) {
-                return incoming;
-              }
-              return item.id === incoming.id ? incoming : item;
-            });
+            return current.map((item) => item.id === incoming.id ? incoming : item);
+          }
+          if (optimisticMatch) {
+            return current.map((item) => item.tempClientId === optimisticMatch.tempClientId ? incoming : item);
           }
           return [...current, incoming];
         });
@@ -220,16 +239,49 @@ export function MessageProvider({ children }) {
         // group including the sender, so we must filter them on the frontend.
         // We compare by user_id (not username) because user_id is guaranteed
         // unique across all members, including in group conversations.
-        if (payload.user_id === user?.id) return;
-        setTypingUsers((current) => current.includes(payload.username) ? current : [...current, payload.username]);
+        const eventConversationId = Number(payload.conversation_id);
+        const eventUserId = Number(payload.user_id);
+        console.log('[TYPING HANDLER ENTERED]', payload);
+        console.log('[TYPING CONVERSATION CHECK]', {
+          eventConversationId: payload.conversation_id,
+          currentConversationId: selectedConversation?.id,
+          eventConversationType: typeof payload.conversation_id,
+          currentConversationType: typeof selectedConversation?.id,
+        });
+        if (
+          eventConversationId !== Number(selectedConversation?.id)
+          || !Number.isFinite(eventUserId)
+          || eventUserId === Number(user?.id)
+        ) return;
+        setTypingUsers((current) => {
+          const nextTypingUsers = current.some((typingUser) => typingUser.id === eventUserId)
+            ? current
+            : [...current, { id: eventUserId, username: payload.username }];
+          console.log('[TYPING BEFORE STATE UPDATE]', current);
+          console.log('[TYPING NEW STATE]', nextTypingUsers);
+           
+          return nextTypingUsers;
+        });
         return;
       }
 
       if (payload.type === 'typing_stop') {
         // Mirror the guard above: ignore stop events from ourselves so we
         // don't accidentally clear another user's indicator.
-        if (payload.user_id === user?.id) return;
-        setTypingUsers((current) => current.filter((name) => name !== payload.username));
+        const eventConversationId = Number(payload.conversation_id);
+        const eventUserId = Number(payload.user_id);
+        console.log('[TYPING STOP HANDLER ENTERED]', payload);
+        if (
+          eventConversationId !== Number(selectedConversation?.id)
+          || !Number.isFinite(eventUserId)
+          || eventUserId === Number(user?.id)
+        ) return;
+        setTypingUsers((current) => {
+          const nextTypingUsers = current.filter((typingUser) => typingUser.id !== eventUserId);
+          console.log('[TYPING BEFORE STATE UPDATE]', current);
+          console.log('[TYPING NEW STATE]', nextTypingUsers);
+          return nextTypingUsers;
+        });
         return;
       }
 

@@ -1,4 +1,7 @@
 from django.db import transaction
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
+from django.contrib.auth import get_user_model
 from django.db.models import Count, Q
 from rest_framework import generics, status
 from rest_framework.permissions import IsAuthenticated
@@ -10,6 +13,8 @@ from .serializers import (
     ConversationListSerializer,
     ConversationSerializer,
 )
+
+User = get_user_model()
 
 
 class ConversationPermissionMixin:
@@ -25,18 +30,56 @@ class PrivateConversationCreateView(generics.GenericAPIView):
         serializer = self.get_serializer(data=request.data, context={'request': request, 'conversation_type': 'private'})
         serializer.is_valid(raise_exception=True)
 
-        existing = Conversation.objects.filter(
-            conversation_type=Conversation.ConversationType.PRIVATE,
-            memberships__user=request.user,
-            memberships__is_active=True,
-        ).filter(memberships__user_id=serializer.validated_data['user_id']).first()
-        if existing:
-            return self._success_response('Private conversation already exists', ConversationSerializer(existing).data, status.HTTP_200_OK)
-
         with transaction.atomic():
-            conversation = serializer.create_private_conversation(request.user, serializer.validated_data['user_id'])
+            target_user_id = serializer.validated_data['user_id']
+            # Lock both users in a stable order. This makes simultaneous A→B
+            # and B→A requests serialize without adding a second data model.
+            list(User.objects.select_for_update().filter(id__in=sorted((request.user.id, target_user_id))).order_by('id'))
+            conversation = self._find_private_conversation(request.user.id, target_user_id)
+            created = conversation is None
+            if created:
+                conversation = serializer.create_private_conversation(request.user, target_user_id)
 
-        return self._success_response('Private conversation created successfully', ConversationSerializer(conversation).data, status.HTTP_201_CREATED)
+        conversation = self._with_members(conversation)
+        payload = ConversationSerializer(conversation).data
+        if not created:
+            return self._success_response('Private conversation already exists', payload, status.HTTP_200_OK)
+
+        self._notify_participant(target_user_id, payload)
+        return self._success_response('Private conversation created successfully', payload, status.HTTP_201_CREATED)
+
+    def _find_private_conversation(self, user_id, target_user_id):
+        return (
+            Conversation.objects.filter(
+                conversation_type=Conversation.ConversationType.PRIVATE,
+            )
+            .annotate(
+                member_count=Count('memberships'),
+                requested_member_count=Count(
+                    'memberships',
+                    filter=Q(memberships__user_id__in=(user_id, target_user_id), memberships__is_active=True),
+                ),
+            )
+            .filter(member_count=2, requested_member_count=2)
+            .first()
+        )
+
+    def _with_members(self, conversation):
+        return (
+            Conversation.objects.select_related('created_by')
+            .prefetch_related('memberships__user')
+            .annotate(member_count=Count('memberships'))
+            .get(pk=conversation.pk)
+        )
+
+    def _notify_participant(self, user_id, conversation):
+        channel_layer = get_channel_layer()
+        if channel_layer is None:
+            return
+        async_to_sync(channel_layer.group_send)(
+            f'user_{user_id}',
+            {'type': 'conversation.created', 'conversation': conversation},
+        )
 
     def _success_response(self, message, data=None, status_code=status.HTTP_200_OK):
         payload = {'success': True, 'message': message}

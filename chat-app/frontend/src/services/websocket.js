@@ -66,6 +66,7 @@ export function connect({ conversationId, token }) {
   setConnectionStatus('connecting');
 
   const ws = new WebSocket(buildSocketUrl(conversationId, token));
+  console.log('[WS CREATED]', { conversationId, url: buildSocketUrl(conversationId, token) });
   socket = ws;
 
   ws.addEventListener('open', () => {
@@ -75,7 +76,9 @@ export function connect({ conversationId, token }) {
 
   ws.addEventListener('message', (event) => {
     try {
+      console.log('[WS RAW RECEIVED]', event.data);
       const payload = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+      console.log('[WS PARSED]', payload);
       emit('message', payload);
     } catch (error) {
       emit('message', { type: 'error', message: 'Unable to parse websocket payload.' });
@@ -83,6 +86,7 @@ export function connect({ conversationId, token }) {
   });
 
   ws.addEventListener('close', () => {
+    console.log('[WS CLOSED]', { conversationId });
     if (socket === ws) {
       socket = null;
     }
@@ -129,6 +133,18 @@ export function reconnect() {
 }
 
 export function send(payload) {
+  // Log BEFORE the readyState guard so silent drops are visible in the console.
+  if (payload.type === 'typing_start' || payload.type === 'typing_stop') {
+    const socketState = socket
+      ? ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'][socket.readyState]
+      : 'NO_SOCKET';
+    console.log(`[TYPING] send() called for ${payload.type}`, {
+      conversation_id: payload.conversation_id,
+      socketState,
+      willSend: !!(socket && socket.readyState === WebSocket.OPEN),
+    });
+  }
+
   if (!socket || socket.readyState !== WebSocket.OPEN) {
     return false;
   }

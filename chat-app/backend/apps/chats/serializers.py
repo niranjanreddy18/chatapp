@@ -19,10 +19,14 @@ class ConversationSerializer(serializers.ModelSerializer):
     members = ConversationMemberSerializer(source='memberships', many=True, read_only=True)
     creator_id = serializers.IntegerField(source='created_by.id', read_only=True)
     creator_username = serializers.CharField(source='created_by.username', read_only=True)
+    member_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Conversation
-        fields = ('id', 'name', 'conversation_type', 'avatar', 'creator_id', 'creator_username', 'created_at', 'updated_at', 'members')
+        fields = ('id', 'name', 'conversation_type', 'avatar', 'creator_id', 'creator_username', 'member_count', 'created_at', 'updated_at', 'members')
+
+    def get_member_count(self, obj):
+        return getattr(obj, 'member_count', obj.memberships.count())
 
 
 class ConversationListSerializer(serializers.ModelSerializer):
@@ -57,6 +61,8 @@ class ConversationCreateSerializer(serializers.Serializer):
                 raise serializers.ValidationError({'user_id': 'A user_id is required for private conversations.'})
             if target_user_id == user.id:
                 raise serializers.ValidationError({'user_id': 'You cannot create a private conversation with yourself.'})
+            if not User.objects.filter(pk=target_user_id).exists():
+                raise serializers.ValidationError({'user_id': 'User not found.'})
             return attrs
 
         if conversation_type == 'group':

@@ -105,6 +105,19 @@ export function ConversationProvider({ children }) {
   }, []);
 
   useEffect(() => {
+    const handleConversationCreated = (payload) => {
+      if (payload?.type !== 'conversation_created' || !payload.conversation) return;
+      setConversations((current) => [
+        payload.conversation,
+        ...current.filter((item) => item.id !== payload.conversation.id),
+      ]);
+    };
+
+    registerListener('message', handleConversationCreated);
+    return () => removeListener('message', handleConversationCreated);
+  }, []);
+
+  useEffect(() => {
     if (!selectedConversation?.id || !isAuthenticated || !token) {
       disconnectSocket(true);
       return;

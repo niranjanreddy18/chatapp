@@ -16,8 +16,10 @@ from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from django.db import IntegrityError
+
 from . import services
-from .models import Message
+from .models import Attachment, Message
 from .pagination import MessagePagination
 from .permissions import IsConversationMember, IsSender
 from .serializers import (
@@ -31,6 +33,7 @@ from .serializers import (
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 import json
+
 
 
 # ---------------------------------------------------------------------------
@@ -271,6 +274,10 @@ class UploadAttachmentView(generics.GenericAPIView):
     def post(self, request, *args, **kwargs):
         file       = request.FILES.get('file')
         message_id = request.data.get('message_id')
+        # Client-generated idempotency key.  Present for all compose-bar uploads
+        # (first attempt and every retry use the SAME UUID).  Absent for the
+        # edit-message upload path, which does not need idempotency.
+        upload_id  = request.data.get('upload_id') or None
 
         if not file:
             return _err('No file provided.', {}, status.HTTP_400_BAD_REQUEST)
@@ -289,8 +296,23 @@ class UploadAttachmentView(generics.GenericAPIView):
         if message.is_deleted:
             return _err('Cannot attach files to a deleted message.', {}, status.HTTP_400_BAD_REQUEST)
 
-        attachment = services.upload_attachment(message=message, file=file)
-        out        = AttachmentSerializer(attachment, context={'request': request})
+        try:
+            attachment = services.upload_attachment(
+                message=message,
+                file=file,
+                upload_id=upload_id,
+            )
+        except IntegrityError:
+            # Two concurrent retries with the same upload_id both passed the
+            # initial get() check inside the service and raced to INSERT.  The
+            # losing INSERT raised a unique-constraint IntegrityError.  Fetch
+            # the already-committed row and return it so both callers succeed.
+            if upload_id:
+                attachment = Attachment.objects.get(upload_id=upload_id)
+            else:
+                raise   # unexpected — re-raise for visibility
+
+        out = AttachmentSerializer(attachment, context={'request': request})
         # Broadcast updated message to the conversation group so other
         # participants receive the new attachment in real-time.
         try:
@@ -312,3 +334,4 @@ class UploadAttachmentView(generics.GenericAPIView):
             pass
 
         return _ok('File uploaded successfully.', out.data, status.HTTP_201_CREATED)
+
