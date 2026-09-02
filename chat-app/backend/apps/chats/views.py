@@ -1,12 +1,17 @@
+import json
 from django.db import transaction
 from django.utils import timezone
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from django.contrib.auth import get_user_model
-from django.db.models import Count, Q
+from django.db.models import Count, Q, OuterRef, Subquery, IntegerField, Value
+from django.db.models.functions import Coalesce
 from rest_framework import generics, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+
+# Message is imported lazily inside get_queryset to avoid a circular
+# import at module load time (apps.messages depends on apps.chats).
 
 from .models import Conversation, ConversationMember
 from .serializers import (
@@ -21,6 +26,16 @@ User = get_user_model()
 class ConversationPermissionMixin:
     def get_queryset(self):
         return Conversation.objects.filter(memberships__user=self.request.user, memberships__is_active=True).distinct()
+
+    def _success_response(self, message, data=None, status_code=status.HTTP_200_OK):
+        payload = {'success': True, 'message': message}
+        if data is not None:
+            payload['data'] = data
+        return Response(payload, status=status_code)
+
+    def _err(self, message, status_code=status.HTTP_400_BAD_REQUEST):
+        return Response({'success': False, 'message': message}, status=status_code)
+
 
 
 class PrivateConversationCreateView(generics.GenericAPIView):
@@ -114,13 +129,81 @@ class ConversationListView(ConversationPermissionMixin, generics.ListAPIView):
     serializer_class = ConversationListSerializer
 
     def get_queryset(self):
-        queryset = super().get_queryset().prefetch_related('memberships__user').select_related('created_by')
-        return queryset.annotate(member_count=Count('memberships')).order_by('-updated_at', '-created_at')
+        user = self.request.user
+        from apps.messages.models import Message
+
+        # Subquery to accurately count unread messages for this user in each conversation.
+        # Avoids JOIN multiplication and accurately counts messages not read by user.
+        unread_subquery = (
+            Message.objects.filter(
+                conversation_id=OuterRef('pk'),
+                is_cleared=False,
+                is_deleted=False,
+            )
+            .exclude(sender=user)
+            .exclude(read_receipts__user=user)
+            .values('conversation_id')
+            .annotate(c=Count('id'))
+            .values('c')
+        )
+
+        queryset = (
+            super().get_queryset()
+            .prefetch_related('memberships__user')
+            .select_related('created_by')
+            .annotate(
+                member_count=Count('memberships', distinct=True),
+                unread_count=Coalesce(Subquery(unread_subquery, output_field=IntegerField()), Value(0)),
+            )
+            .order_by('-updated_at', '-created_at')
+        )
+        return queryset
 
     def list(self, request, *args, **kwargs):
         queryset = self.get_queryset()
         serializer = self.get_serializer(queryset, many=True)
         return self._success_response('Conversations fetched successfully', serializer.data, status.HTTP_200_OK)
+
+
+class MarkConversationReadView(ConversationPermissionMixin, generics.GenericAPIView):
+    """
+    POST /api/conversations/<pk>/read/
+
+    Marks all unread messages in the conversation as read for the requesting user.
+    Broadcasts message_read events to the room and senders so read receipts update in real-time.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk, *args, **kwargs):
+        conversation = self.get_queryset().filter(pk=pk).first()
+        if not conversation:
+            return self._err('Conversation not found or you are not a member.', status.HTTP_404_NOT_FOUND)
+
+        from apps.messages.services import mark_conversation_read
+        marked_ids = mark_conversation_read(user=request.user, conversation_id=pk)
+
+        if marked_ids:
+            channel_layer = get_channel_layer()
+            if channel_layer is not None:
+                for mid in marked_ids:
+                    payload = json.dumps({
+                        'type': 'message_read',
+                        'message_id': mid,
+                        'user_id': request.user.id,
+                        'read_at': timezone.now().isoformat(),
+                    })
+                    try:
+                        async_to_sync(channel_layer.group_send)(
+                            f'chat_{pk}',
+                            {'type': 'chat.message', 'payload': payload},
+                        )
+                    except Exception:
+                        pass
+
+        return self._success_response('Conversation marked as read.', {'read_message_ids': marked_ids}, status.HTTP_200_OK)
+
+    def _err(self, message, status_code=status.HTTP_400_BAD_REQUEST):
+        return Response({'success': False, 'message': message}, status=status_code)
 
     def _success_response(self, message, data=None, status_code=status.HTTP_200_OK):
         payload = {'success': True, 'message': message}

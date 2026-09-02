@@ -32,7 +32,45 @@ class ProfileView(generics.GenericAPIView):
             return self._error_response('Profile update failed', serializer.errors, status.HTTP_400_BAD_REQUEST)
 
         serializer.save()
-        return self._success_response('Profile updated successfully', ProfileSerializer(profile).data, status.HTTP_200_OK)
+        profile_data = ProfileSerializer(profile, context={'request': request}).data
+
+        # Broadcast update to all active conversation channels so other online users see it in real-time
+        try:
+            import json
+            from asgiref.sync import async_to_sync
+            from channels.layers import get_channel_layer
+            from apps.chats.models import ConversationMember
+
+            channel_layer = get_channel_layer()
+            if channel_layer:
+                conversation_ids = list(
+                    ConversationMember.objects.filter(user=request.user, is_active=True)
+                    .values_list('conversation_id', flat=True)
+                    .distinct()
+                )
+                payload = json.dumps({
+                    'type': 'user_updated',
+                    'user_id': request.user.id,
+                    'username': request.user.username,
+                    'avatar': profile_data.get('avatar'),
+                    'status_message': profile_data.get('status_message', ''),
+                    'bio': profile_data.get('bio', ''),
+                })
+                for cid in conversation_ids:
+                    async_to_sync(channel_layer.group_send)(
+                        f'chat_{cid}',
+                        {
+                            'type': 'chat.message',
+                            'payload': payload,
+                        }
+                    )
+        except Exception:
+            pass
+
+        return self._success_response('Profile updated successfully', profile_data, status.HTTP_200_OK)
+
+    def patch(self, request, *args, **kwargs):
+        return self.put(request, *args, **kwargs)
 
     def _success_response(self, message, data=None, status_code=status.HTTP_200_OK):
         payload = {'success': True, 'message': message}
@@ -56,10 +94,8 @@ class UserListView(generics.ListAPIView):
 
         # ?exclude_existing=true → exclude users who already have an active
         # private conversation with the current user (used by "Start Chat" modal
-        # to show only users you haven't chatted with yet).
         if self.request.query_params.get('exclude_existing', '').lower() == 'true':
             from apps.chats.models import Conversation, ConversationMember
-            from django.db.models import Count, Q
 
             # Find IDs of all private conversations the current user is in
             existing_partner_ids = (

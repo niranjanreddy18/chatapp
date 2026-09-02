@@ -56,6 +56,27 @@ class LoginSerializer(serializers.Serializer):
 
 
 class UserSerializer(serializers.ModelSerializer):
+    avatar = serializers.SerializerMethodField()
+    bio = serializers.SerializerMethodField()
+    status_message = serializers.SerializerMethodField()
+
     class Meta:
         model = User
-        fields = ('id', 'username', 'email')
+        fields = ('id', 'username', 'email', 'avatar', 'bio', 'status_message')
+
+    def get_avatar(self, obj):
+        profile = getattr(obj, 'profile', None)
+        if profile and profile.avatar:
+            try:
+                return profile.avatar.url
+            except Exception:
+                return None
+        return None
+
+    def get_bio(self, obj):
+        profile = getattr(obj, 'profile', None)
+        return profile.bio if profile else ''
+
+    def get_status_message(self, obj):
+        profile = getattr(obj, 'profile', None)
+        return profile.status_message if profile else ''

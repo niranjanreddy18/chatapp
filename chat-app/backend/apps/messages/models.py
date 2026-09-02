@@ -1,6 +1,6 @@
 from django.conf import settings
 from django.db import models
-from cloudinary_storage.storage import MediaCloudinaryStorage
+from .storage import ChatAttachmentCloudinaryStorage
 
 
 class Message(models.Model):
@@ -109,7 +109,7 @@ class Attachment(models.Model):
     )
     file        = models.FileField(
         upload_to='chat/',
-        storage=MediaCloudinaryStorage(),  # uploads go to Cloudinary, not local /media/
+        storage=ChatAttachmentCloudinaryStorage(),  # dynamically handles image, video, and raw files
     )
     file_name   = models.CharField(max_length=255)
     file_size   = models.PositiveBigIntegerField(help_text='File size in bytes')
@@ -130,6 +130,27 @@ class Attachment(models.Model):
     class Meta:
         app_label = 'chat_messages'
         ordering  = ('uploaded_at',)
+
+    @property
+    def resource_type(self) -> str:
+        """
+        Dynamically determine the Cloudinary resource_type ('image', 'video', or 'raw')
+        from MIME file_type, file_name, or stored file path.
+        """
+        if self.file_type:
+            ft = self.file_type.lower()
+            if ft.startswith('image/'):
+                return 'image'
+            if ft.startswith(('video/', 'audio/')):
+                return 'video'
+        if self.file_name:
+            import os
+            ext = os.path.splitext(self.file_name)[1].lstrip('.').lower()
+            if ext in ChatAttachmentCloudinaryStorage.IMAGE_EXTENSIONS:
+                return 'image'
+            if ext in ChatAttachmentCloudinaryStorage.VIDEO_EXTENSIONS or ext in ChatAttachmentCloudinaryStorage.AUDIO_EXTENSIONS:
+                return 'video'
+        return 'raw'
 
     def __str__(self):
         return f'{self.file_name} → message #{self.message_id}'

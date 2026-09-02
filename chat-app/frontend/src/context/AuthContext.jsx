@@ -251,6 +251,17 @@ export function AuthProvider({ children }) {
   }, [_clearAll, location.pathname, navigate]);
 
   /**
+   * updateUser(partialUserData)
+   * Updates the in-memory user object immediately without waiting for a re-fetch.
+   */
+  const updateUser = useCallback((updatedData) => {
+    setUser((prev) => {
+      if (!prev) return updatedData;
+      return { ...prev, ...updatedData };
+    });
+  }, []);
+
+  /**
    * refreshAuthState()
    * Re-fetches the current user from /api/auth/me/ and updates the context.
    * Useful after profile updates.
@@ -285,6 +296,7 @@ export function AuthProvider({ children }) {
     login,
     register,
     logout,
+    updateUser,
     refreshAuthState,
   }), [
     user,
@@ -295,6 +307,7 @@ export function AuthProvider({ children }) {
     login,
     register,
     logout,
+    updateUser,
     refreshAuthState,
   ]);
 

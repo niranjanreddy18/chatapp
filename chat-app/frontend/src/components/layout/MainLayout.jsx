@@ -1,35 +1,67 @@
-import { Menu } from 'lucide-react';
 import { useState } from 'react';
-import Header from './Header';
+import { useLocation, useNavigate } from 'react-router-dom';
+import NavRail from './NavRail';
 import ConversationSidebar from '../chat/ConversationSidebar';
+import { useConversation } from '../../context/ConversationContext';
 
 function MainLayout({ children }) {
-  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const location = useLocation();
+  const navigate = useNavigate();
+  const { selectedConversation, setSelectedConversation } = useConversation();
+
+  // Determine active nav tab from route or local state
+  const [activeTab, setActiveTab] = useState(() => {
+    if (location.pathname === '/settings') return 'settings';
+    if (location.pathname === '/profile') return 'profile';
+    return 'chats';
+  });
+
+  const handleSelectTab = (tabId) => {
+    setActiveTab(tabId);
+    if (tabId === 'settings') {
+      navigate('/settings');
+    } else if (tabId === 'profile') {
+      navigate('/profile');
+    } else if (tabId === 'chats' || tabId === 'contacts' || tabId === 'groups') {
+      if (location.pathname !== '/home' && location.pathname !== '/chat') {
+        navigate('/home');
+      }
+      if (tabId === 'contacts') {
+        window.dispatchEvent(new CustomEvent('chatapp:open-new-chat'));
+      } else if (tabId === 'groups') {
+        window.dispatchEvent(new CustomEvent('chatapp:open-new-group'));
+      }
+    }
+  };
+
+  const handleBackMobile = () => {
+    setSelectedConversation(null);
+  };
 
   return (
-    <div className="flex min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(56,189,248,0.12),_transparent_35%),linear-gradient(135deg,_rgba(15,23,42,0.98),_rgba(2,6,23,1))] text-slate-900 dark:text-slate-100">
-      <aside className="hidden w-[360px] border-r border-slate-200/70 bg-slate-950/90 shadow-[24px_0_80px_-40px_rgba(2,6,23,0.9)] lg:block">
-        <ConversationSidebar />
-      </aside>
-
-      {mobileSidebarOpen && (
-        <div className="fixed inset-0 z-40 bg-slate-950/70 backdrop-blur-sm lg:hidden" onClick={() => setMobileSidebarOpen(false)} />
-      )}
-
-      <div className={`fixed inset-y-0 left-0 z-50 w-[320px] transform border-r border-slate-800 bg-slate-950/95 shadow-2xl transition duration-300 lg:hidden ${mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
-        <ConversationSidebar />
+    <div className="flex h-screen w-screen overflow-hidden bg-[#EDECEC] dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-sans antialiased select-none">
+      {/* ── 1. Left Vertical Navigation Rail (70px) ───────────────────────── */}
+      <div className="hidden md:flex h-full w-[70px] shrink-0">
+        <NavRail activeTab={activeTab} onSelectTab={handleSelectTab} />
       </div>
 
-      <div className="flex min-h-screen flex-1 flex-col">
-        <Header />
-        <div className="flex items-center gap-2 border-b border-slate-200/70 bg-white/70 px-4 py-3 backdrop-blur dark:border-slate-800 dark:bg-slate-950/70 lg:hidden">
-          <button onClick={() => setMobileSidebarOpen(true)} className="rounded-2xl border border-slate-300 p-2.5 transition hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800" aria-label="Open conversations">
-            <Menu size={18} />
-          </button>
-          <span className="text-sm font-medium">Menu</span>
-        </div>
-        <main className="flex-1 p-4 sm:p-6 lg:p-8">{children}</main>
+      {/* ── 2. Chat Sidebar (380px) ────────────────────────────────────────── */}
+      <div
+        className={`h-full w-full md:w-[360px] lg:w-[380px] shrink-0 ${
+          selectedConversation ? 'hidden md:flex' : 'flex'
+        }`}
+      >
+        <ConversationSidebar onSelectChatMobile={() => {}} />
       </div>
+
+      {/* ── 3. Main Chat / Content Area (Remaining Space) ─────────────────── */}
+      <main
+        className={`h-full flex-1 min-w-0 overflow-hidden ${
+          !selectedConversation ? 'hidden md:flex' : 'flex'
+        } flex-col`}
+      >
+        {children}
+      </main>
     </div>
   );
 }

@@ -43,3 +43,27 @@ class ProfileAPITests(APITestCase):
         search_response = self.client.get(reverse('users'), {'search': 'bo'})
         self.assertEqual(search_response.status_code, status.HTTP_200_OK)
         self.assertEqual(search_response.data['data'][0]['username'], 'bob')
+
+    def test_profile_update_username(self):
+        self.authenticate(self.user)
+        response = self.client.put(
+            reverse('profile'),
+            {'username': 'alice_updated', 'bio': 'Updated bio'},
+            format='json'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['data']['username'], 'alice_updated')
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.username, 'alice_updated')
+
+    def test_auth_me_returns_profile_fields(self):
+        self.authenticate(self.user)
+        self.user.profile.bio = 'My test bio'
+        self.user.profile.status_message = 'Online now'
+        self.user.profile.save()
+
+        response = self.client.get(reverse('accounts:me'))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['data']['bio'], 'My test bio')
+        self.assertEqual(response.data['data']['status_message'], 'Online now')

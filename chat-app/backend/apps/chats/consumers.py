@@ -13,7 +13,7 @@ from apps.chats.models import ConversationMember
 from apps.messages import services as message_services
 from apps.messages.models import Message
 from apps.messages.serializers import MessageSerializer, SendMessageSerializer
-from apps.messages.services import mark_message_read
+from apps.messages.services import mark_message_read, mark_conversation_read
 from apps.users.models import Profile
 
 logger = logging.getLogger(__name__)
@@ -105,6 +105,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
         elif event_type == 'read_message':
             await self.handle_read_message(payload)
             return
+        elif event_type == 'read_conversation':
+            await self.handle_read_conversation(payload)
+            return
         else:
             await self.send(text_data=json.dumps({
                 'type': 'error',
@@ -151,10 +154,14 @@ class ChatConsumer(AsyncWebsocketConsumer):
             'type': 'new_message',
             'message': serialized_message,
         }
-        await self.channel_layer.group_send(self.room_group_name, {
-            'type': 'chat.message',
-            'payload': json.dumps(payload),
-        })
+        # Broadcast to all active conversation members' user groups so they receive
+        # the message regardless of which conversation they currently have open.
+        member_ids = await self._get_active_member_user_ids(validated['conversation_id'])
+        for member_id in member_ids:
+            await self.channel_layer.group_send(f'user_{member_id}', {
+                'type': 'chat.message',
+                'payload': json.dumps(payload),
+            })
 
     async def chat_message(self, event):
         await self.send(text_data=event['payload'])
@@ -187,6 +194,32 @@ class ChatConsumer(AsyncWebsocketConsumer):
             'type': 'chat_cleared',
             'conversation_id': event['conversation_id'],
             'cleared_by': event['cleared_by'],
+        }))
+
+    async def message_deleted(self, event):
+        """
+        Fired when a message is soft-deleted.
+        Forwards the event to the connected browser so the frontend can
+        update the deleted message in real-time.
+        """
+        await self.send(text_data=json.dumps({
+            'type': 'message_deleted',
+            'message_id': event['message_id'],
+            'conversation_id': event['conversation_id'],
+            'message': event.get('message'),
+        }))
+
+    async def message_edited(self, event):
+        """
+        Fired when a message is edited.
+        Forwards the event to the connected browser so the frontend can
+        update the message content in real-time.
+        """
+        await self.send(text_data=json.dumps({
+            'type': 'message_edited',
+            'message_id': event['message_id'],
+            'conversation_id': event['conversation_id'],
+            'message': event.get('message'),
         }))
 
     async def handle_typing_start(self):
@@ -274,6 +307,29 @@ class ChatConsumer(AsyncWebsocketConsumer):
             }),
         })
 
+    async def handle_read_conversation(self, payload):
+        conversation_id = payload.get('conversation_id', self.conversation_id)
+        try:
+            conversation_id = int(conversation_id)
+        except (TypeError, ValueError):
+            return
+
+        try:
+            marked_ids = await self._mark_conversation_read(conversation_id)
+        except PermissionError:
+            return
+
+        for mid in marked_ids:
+            await self.channel_layer.group_send(self.room_group_name, {
+                'type': 'chat.message',
+                'payload': json.dumps({
+                    'type': 'message_read',
+                    'message_id': mid,
+                    'user_id': self.user.id,
+                    'read_at': timezone.now().isoformat(),
+                }),
+            })
+
     async def update_presence(self, *, is_online: bool):
         if getattr(self, 'user', None) is None:
             return
@@ -358,6 +414,29 @@ class ChatConsumer(AsyncWebsocketConsumer):
             .values_list('conversation_id', flat=True)
             .distinct()
         )
+
+    async def _get_active_member_user_ids(self, conversation_id: int):
+        return await database_sync_to_async(self._get_active_member_user_ids_sync)(conversation_id)
+
+    def _get_active_member_user_ids_sync(self, conversation_id: int):
+        return list(
+            ConversationMember.objects.filter(
+                conversation_id=conversation_id,
+                is_active=True,
+            ).values_list('user_id', flat=True)
+        )
+
+    async def _mark_conversation_read(self, conversation_id: int):
+        return await database_sync_to_async(self._mark_conversation_read_sync)(conversation_id)
+
+    def _mark_conversation_read_sync(self, conversation_id: int):
+        if not ConversationMember.objects.filter(
+            conversation_id=conversation_id,
+            user=self.user,
+            is_active=True,
+        ).exists():
+            raise PermissionError('You are not allowed to read messages in this conversation.')
+        return mark_conversation_read(user=self.user, conversation_id=conversation_id)
 
     async def _mark_message_read(self, message_id: int):
         return await database_sync_to_async(self._mark_message_read_sync)(message_id)

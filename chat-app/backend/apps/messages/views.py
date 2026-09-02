@@ -89,6 +89,26 @@ class SendMessageView(generics.GenericAPIView):
         )
 
         out = MessageSerializer(message, context={'request': request})
+        try:
+            channel_layer = get_channel_layer()
+            if channel_layer is not None:
+                payload = json.dumps({
+                    'type': 'new_message',
+                    'message': out.data,
+                })
+                from apps.chats.models import ConversationMember
+                member_ids = list(
+                    ConversationMember.objects.filter(conversation_id=message.conversation_id, is_active=True)
+                    .values_list('user_id', flat=True)
+                )
+                for member_id in member_ids:
+                    async_to_sync(channel_layer.group_send)(
+                        f'user_{member_id}',
+                        {'type': 'chat.message', 'payload': payload},
+                    )
+        except Exception:
+            pass
+
         return _ok('Message sent successfully.', out.data, status.HTTP_201_CREATED)
 
 
@@ -108,8 +128,8 @@ class ConversationMessagesView(generics.GenericAPIView):
     Query optimisation:
         - select_related: sender, sender__profile, reply_to, reply_to__sender
           → eliminates N+1 on user/profile lookups.
-        - prefetch_related: attachments
-          → single IN query for all attachment rows.
+        - prefetch_related: attachments, read_receipts
+          → single IN query for all attachment rows and read receipts.
     """
 
     permission_classes = [IsAuthenticated, IsConversationMember]
@@ -126,11 +146,16 @@ class ConversationMessagesView(generics.GenericAPIView):
                 'reply_to',
                 'reply_to__sender',
             )
-            .prefetch_related('attachments')
+            .prefetch_related('attachments', 'read_receipts')
             .order_by('created_at')
         )
 
     def get(self, request, conversation_id: int, *args, **kwargs):
+        try:
+            services.mark_conversation_read(user=request.user, conversation_id=conversation_id)
+        except Exception:
+            pass
+
         queryset   = self.get_queryset(conversation_id)
         paginator  = self.pagination_class()
         page       = paginator.paginate_queryset(queryset, request, view=self)
@@ -186,6 +211,31 @@ class EditMessageView(generics.GenericAPIView):
         )
 
         out = MessageSerializer(updated, context={'request': request})
+        try:
+            channel_layer = get_channel_layer()
+            if channel_layer is not None:
+                payload = json.dumps({
+                    'type': 'message_edited',
+                    'message_id': message.id,
+                    'conversation_id': message.conversation_id,
+                    'message': out.data,
+                })
+                async_to_sync(channel_layer.group_send)(
+                    f'chat_{message.conversation_id}',
+                    {'type': 'chat.message', 'payload': payload},
+                )
+                from apps.chats.models import ConversationMember
+                member_ids = list(
+                    ConversationMember.objects.filter(conversation_id=message.conversation_id, is_active=True)
+                    .values_list('user_id', flat=True)
+                )
+                for member_id in member_ids:
+                    async_to_sync(channel_layer.group_send)(
+                        f'user_{member_id}',
+                        {'type': 'chat.message', 'payload': payload},
+                    )
+        except Exception:
+            pass
         return _ok('Message edited successfully.', out.data, status.HTTP_200_OK)
 
 
@@ -222,7 +272,90 @@ class DeleteMessageView(generics.GenericAPIView):
         message = self.get_object(message_id)
         deleted = services.soft_delete_message(message=message)
         out     = MessageSerializer(deleted, context={'request': request})
+        try:
+            channel_layer = get_channel_layer()
+            if channel_layer is not None:
+                payload = json.dumps({
+                    'type': 'message_deleted',
+                    'message_id': message.id,
+                    'conversation_id': message.conversation_id,
+                    'message': out.data,
+                })
+                async_to_sync(channel_layer.group_send)(
+                    f'chat_{message.conversation_id}',
+                    {'type': 'chat.message', 'payload': payload},
+                )
+                from apps.chats.models import ConversationMember
+                member_ids = list(
+                    ConversationMember.objects.filter(conversation_id=message.conversation_id, is_active=True)
+                    .values_list('user_id', flat=True)
+                )
+                for member_id in member_ids:
+                    async_to_sync(channel_layer.group_send)(
+                        f'user_{member_id}',
+                        {'type': 'chat.message', 'payload': payload},
+                    )
+        except Exception:
+            pass
         return _ok('Message deleted successfully.', out.data, status.HTTP_200_OK)
+
+
+# ---------------------------------------------------------------------------
+# 4b. DELETE /api/messages/<message_id>/remove/  — Permanently remove a message
+# ---------------------------------------------------------------------------
+
+class RemoveMessageView(generics.GenericAPIView):
+    """
+    Permanently remove / hard-delete a message (or deleted message bubble) from the database.
+
+    Permissions:
+        - Must be authenticated.
+        - Must be the original sender (IsSender).
+    """
+
+    permission_classes = [IsAuthenticated, IsSender]
+
+    def get_object(self, message_id: int) -> Message:
+        try:
+            message = Message.objects.select_related('sender').get(pk=message_id)
+        except Message.DoesNotExist:
+            from rest_framework.exceptions import NotFound
+            raise NotFound('Message not found.')
+
+        self.check_object_permissions(self.request, message)
+        return message
+
+    def delete(self, request, message_id: int, *args, **kwargs):
+        message = self.get_object(message_id)
+        conversation_id = message.conversation_id
+        msg_id = message.id
+        services.remove_message(message=message)
+
+        try:
+            channel_layer = get_channel_layer()
+            if channel_layer is not None:
+                payload = json.dumps({
+                    'type': 'message_removed',
+                    'message_id': msg_id,
+                    'conversation_id': conversation_id,
+                })
+                async_to_sync(channel_layer.group_send)(
+                    f'chat_{conversation_id}',
+                    {'type': 'chat.message', 'payload': payload},
+                )
+                from apps.chats.models import ConversationMember
+                member_ids = list(
+                    ConversationMember.objects.filter(conversation_id=conversation_id, is_active=True)
+                    .values_list('user_id', flat=True)
+                )
+                for member_id in member_ids:
+                    async_to_sync(channel_layer.group_send)(
+                        f'user_{member_id}',
+                        {'type': 'chat.message', 'payload': payload},
+                    )
+        except Exception:
+            pass
+        return _ok('Message removed successfully.', {'message_id': msg_id}, status.HTTP_200_OK)
 
 
 # ---------------------------------------------------------------------------
@@ -313,24 +446,35 @@ class UploadAttachmentView(generics.GenericAPIView):
                 raise   # unexpected — re-raise for visibility
 
         out = AttachmentSerializer(attachment, context={'request': request})
-        # Broadcast updated message to the conversation group so other
+        # Broadcast updated message to the conversation room and member channels so all
         # participants receive the new attachment in real-time.
         try:
-            # Serialize the full message with request context so attachment
-            # file_url is absolute and accessible by clients.
+            # Refresh message from DB to ensure all relations and attachments are current
+            message.refresh_from_db()
             serialized_message = MessageSerializer(message, context={'request': request}).data
-            payload = {
+            payload = json.dumps({
                 'type': 'new_message',
                 'message': serialized_message,
-            }
-            channel_layer = get_channel_layer()
-            group_name = f'chat_{message.conversation_id}'
-            async_to_sync(channel_layer.group_send)(group_name, {
-                'type': 'chat.message',
-                'payload': json.dumps(payload),
             })
+            channel_layer = get_channel_layer()
+            if channel_layer is not None:
+                # 1. Broadcast to active chat room
+                async_to_sync(channel_layer.group_send)(
+                    f'chat_{message.conversation_id}',
+                    {'type': 'chat.message', 'payload': payload},
+                )
+                # 2. Broadcast to each member's private channel
+                from apps.chats.models import ConversationMember
+                member_ids = list(
+                    ConversationMember.objects.filter(conversation_id=message.conversation_id, is_active=True)
+                    .values_list('user_id', flat=True)
+                )
+                for member_id in member_ids:
+                    async_to_sync(channel_layer.group_send)(
+                        f'user_{member_id}',
+                        {'type': 'chat.message', 'payload': payload},
+                    )
         except Exception:
-            # Don't fail the upload if broadcasting fails; log could be added.
             pass
 
         return _ok('File uploaded successfully.', out.data, status.HTTP_201_CREATED)

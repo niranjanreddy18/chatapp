@@ -26,7 +26,7 @@ function Header() {
         </Button>
 
         <div className="flex items-center gap-2 rounded-full border border-slate-200 bg-slate-100/90 px-3 py-2 shadow-sm dark:border-slate-700 dark:bg-slate-800/90">
-          <Avatar name={user?.username || 'User'} size="sm" />
+          <Avatar name={user?.username || 'User'} src={user?.avatar} size="sm" />
           <div className="hidden sm:block">
             <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{user?.username || 'Demo User'}</p>
             <p className="text-xs text-slate-500 dark:text-slate-400">Online • Available</p>

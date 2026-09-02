@@ -29,7 +29,20 @@ ALLOWED_MIME_TYPES: frozenset = frozenset({
     'application/msword',
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     'video/mp4',
+    'video/webm',
+    'video/quicktime',
     'audio/mpeg',
+    'audio/mp3',
+    'audio/webm',
+    'audio/ogg',
+    'audio/wav',
+    'audio/x-wav',
+    'audio/wave',
+    'audio/mp4',
+    'audio/m4a',
+    'audio/x-m4a',
+    'audio/aac',
+    'audio/flac',
 })
 
 DELETED_CONTENT = 'This message was deleted.'
@@ -113,6 +126,35 @@ def mark_message_read(*, user, message_id: int) -> MessageRead:
 
 
 @transaction.atomic
+def mark_conversation_read(*, user, conversation_id: int) -> list[int]:
+    """
+    Mark all unread messages in a conversation as read for the given user.
+    Returns the list of message IDs that were marked as read.
+    """
+    assert_is_member(user, conversation_id)
+
+    unread_messages = (
+        Message.objects
+        .filter(
+            conversation_id=conversation_id,
+            is_cleared=False,
+            is_deleted=False,
+        )
+        .exclude(sender=user)
+        .exclude(read_receipts__user=user)
+        .values_list('id', flat=True)
+    )
+
+    message_ids = list(unread_messages)
+    if not message_ids:
+        return []
+
+    receipts = [MessageRead(message_id=mid, user=user) for mid in message_ids]
+    MessageRead.objects.bulk_create(receipts, ignore_conflicts=True)
+    return message_ids
+
+
+@transaction.atomic
 def edit_message(*, message: Message, content: str) -> Message:
     """
     Update a message's content and stamp the edit metadata.
@@ -142,6 +184,17 @@ def soft_delete_message(*, message: Message) -> Message:
     message.is_deleted = True
     message.save(update_fields=['content', 'is_deleted', 'updated_at'])
     return message
+
+
+@transaction.atomic
+def remove_message(*, message: Message) -> int:
+    """
+    Permanently remove a message record from the database.
+    Returns the message ID that was removed.
+    """
+    msg_id = message.id
+    message.delete()
+    return msg_id
 
 
 # ---------------------------------------------------------------------------
@@ -175,11 +228,12 @@ def upload_attachment(*, message: Message, file, upload_id: str | None = None) -
         except Attachment.DoesNotExist:
             pass   # first attempt — fall through to create
 
-    content_type = getattr(file, 'content_type', '')
-    if content_type not in ALLOWED_MIME_TYPES:
+    raw_content_type = getattr(file, 'content_type', '')
+    content_type = raw_content_type.split(';')[0].strip().lower() if raw_content_type else ''
+    if not content_type or (content_type not in ALLOWED_MIME_TYPES and not content_type.startswith('audio/')):
         raise ValidationError({
             'file': (
-                f'Unsupported file type "{content_type}". '
+                f'Unsupported file type "{raw_content_type}". '
                 f'Allowed types: {", ".join(sorted(ALLOWED_MIME_TYPES))}'
             )
         })

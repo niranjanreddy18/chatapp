@@ -9,10 +9,34 @@ User = get_user_model()
 class ConversationMemberSerializer(serializers.ModelSerializer):
     username = serializers.CharField(source='user.username', read_only=True)
     user_id = serializers.IntegerField(source='user.id', read_only=True)
+    email = serializers.CharField(source='user.email', read_only=True)
+    avatar = serializers.SerializerMethodField()
+    bio = serializers.SerializerMethodField()
+    status_message = serializers.SerializerMethodField()
 
     class Meta:
         model = ConversationMember
-        fields = ('id', 'user_id', 'username', 'is_admin', 'is_active', 'joined_at')
+        fields = ('id', 'user_id', 'username', 'email', 'avatar', 'bio', 'status_message', 'is_admin', 'is_active', 'joined_at')
+
+    def get_avatar(self, obj):
+        profile = getattr(obj.user, 'profile', None)
+        if profile and profile.avatar:
+            try:
+                request = self.context.get('request')
+                if request:
+                    return request.build_absolute_uri(profile.avatar.url)
+                return profile.avatar.url
+            except Exception:
+                return None
+        return None
+
+    def get_bio(self, obj):
+        profile = getattr(obj.user, 'profile', None)
+        return profile.bio if profile else ''
+
+    def get_status_message(self, obj):
+        profile = getattr(obj.user, 'profile', None)
+        return profile.status_message if profile else ''
 
 
 class ConversationSerializer(serializers.ModelSerializer):
@@ -20,6 +44,7 @@ class ConversationSerializer(serializers.ModelSerializer):
     creator_id = serializers.IntegerField(source='created_by.id', read_only=True)
     creator_username = serializers.CharField(source='created_by.username', read_only=True)
     member_count = serializers.SerializerMethodField()
+    avatar = serializers.SerializerMethodField()
 
     class Meta:
         model = Conversation
@@ -28,19 +53,58 @@ class ConversationSerializer(serializers.ModelSerializer):
     def get_member_count(self, obj):
         return getattr(obj, 'member_count', obj.memberships.count())
 
+    def get_avatar(self, obj):
+        if obj.conversation_type == 'GROUP':
+            return obj.avatar.url if obj.avatar else None
+        request = self.context.get('request')
+        current_user = request.user if request and request.user.is_authenticated else None
+        for member in obj.memberships.all():
+            if current_user and member.user_id == current_user.id:
+                continue
+            profile = getattr(member.user, 'profile', None)
+            if profile and profile.avatar:
+                try:
+                    if request:
+                        return request.build_absolute_uri(profile.avatar.url)
+                    return profile.avatar.url
+                except Exception:
+                    return None
+        return None
+
 
 class ConversationListSerializer(serializers.ModelSerializer):
     member_count = serializers.SerializerMethodField()
     members = ConversationMemberSerializer(source='memberships', many=True, read_only=True)
+    unread_count = serializers.SerializerMethodField()
+    avatar = serializers.SerializerMethodField()
 
     class Meta:
         model = Conversation
-        fields = ('id', 'name', 'conversation_type', 'avatar', 'member_count', 'members', 'created_at', 'updated_at')
+        fields = ('id', 'name', 'conversation_type', 'avatar', 'member_count', 'members', 'unread_count', 'created_at', 'updated_at')
 
     def get_member_count(self, obj):
-        # Use the pre-annotated value from the queryset when available to avoid
-        # an extra COUNT query per conversation.
         return getattr(obj, 'member_count', obj.memberships.count())
+
+    def get_unread_count(self, obj):
+        return getattr(obj, 'unread_count', 0) or 0
+
+    def get_avatar(self, obj):
+        if obj.conversation_type == 'GROUP':
+            return obj.avatar.url if obj.avatar else None
+        request = self.context.get('request')
+        current_user = request.user if request and request.user.is_authenticated else None
+        for member in obj.memberships.all():
+            if current_user and member.user_id == current_user.id:
+                continue
+            profile = getattr(member.user, 'profile', None)
+            if profile and profile.avatar:
+                try:
+                    if request:
+                        return request.build_absolute_uri(profile.avatar.url)
+                    return profile.avatar.url
+                except Exception:
+                    return None
+        return None
 
 
 class ConversationCreateSerializer(serializers.Serializer):

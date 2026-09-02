@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import api from '../services/api';
 import { connect as connectSocket, disconnect as disconnectSocket, registerListener, removeListener } from '../services/websocket';
@@ -7,12 +7,45 @@ import { useAuth } from './AuthContext';
 const ConversationContext = createContext(null);
 
 export function ConversationProvider({ children }) {
-  const { isAuthenticated, token } = useAuth();
+  const { user, isAuthenticated, token } = useAuth();
   const [conversations, setConversations] = useState([]);
   const [selectedConversation, setSelectedConversation] = useState(null);
   const [presenceMap, setPresenceMap] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [favoriteIds, setFavoriteIds] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('chatapp_favorites') || '[]');
+    } catch {
+      return [];
+    }
+  });
+
+  const toggleFavorite = (conversationId) => {
+    if (!conversationId) return;
+    setFavoriteIds((prev) => {
+      const exists = prev.includes(conversationId);
+      const next = exists
+        ? prev.filter((id) => id !== conversationId)
+        : [...prev, conversationId];
+      try {
+        localStorage.setItem('chatapp_favorites', JSON.stringify(next));
+      } catch {}
+      if (exists) {
+        toast.success('Removed from starred');
+      } else {
+        toast.success('Added to starred');
+      }
+      return next;
+    });
+  };
+
+  const isFavorite = (conversationId) => {
+    return Boolean(conversationId && favoriteIds.includes(conversationId));
+  };
+
+  const userRef = useRef(user);
+  userRef.current = user;
 
   const loadConversations = async () => {
     if (!isAuthenticated || !token) {
@@ -38,6 +71,25 @@ export function ConversationProvider({ children }) {
   };
 
   const refreshConversations = () => loadConversations();
+
+  const markConversationAsRead = async (conversationId) => {
+    if (!conversationId) return;
+    // Optimistic reset in local state
+    setConversations((current) =>
+      current.map((conv) =>
+        conv.id === conversationId
+          ? { ...conv, unread_count: 0 }
+          : conv,
+      ),
+    );
+
+    // Persist read status in backend database
+    try {
+      await api.post(`/conversations/${conversationId}/read/`);
+    } catch {
+      // Non-blocking
+    }
+  };
 
   const createConversation = async (userId) => {
     try {
@@ -76,7 +128,7 @@ export function ConversationProvider({ children }) {
   };
 
   // ---------------------------------------------------------------------------
-  // NEW: Delete conversation — soft-removes the user's own membership.
+  // Delete conversation — soft-removes the user's own membership.
   // ---------------------------------------------------------------------------
   const deleteConversation = async (conversationId) => {
     try {
@@ -136,10 +188,119 @@ export function ConversationProvider({ children }) {
     return () => removeListener('message', handleConversationCreated);
   }, []);
 
+  // Real-time user profile update (user_updated event)
+  useEffect(() => {
+    const handleUserUpdated = (payload) => {
+      if (payload?.type !== 'user_updated' || !payload.user_id) return;
+      const updatedUserId = Number(payload.user_id);
+      const currentAuthUserId = Number(userRef.current?.id ?? null);
+
+      setConversations((current) =>
+        current.map((conv) => {
+          const hasMember = conv.members?.some((m) => m.user_id === updatedUserId);
+          if (!hasMember) return conv;
+
+          const updatedMembers = conv.members.map((m) =>
+            m.user_id === updatedUserId
+              ? {
+                  ...m,
+                  username: payload.username || m.username,
+                  avatar: payload.avatar !== undefined ? payload.avatar : m.avatar,
+                }
+              : m,
+          );
+
+          const isPrivateWithUpdatedUser =
+            conv.conversation_type === 'PRIVATE' &&
+            conv.members?.some((m) => m.user_id === updatedUserId && m.user_id !== currentAuthUserId);
+
+          return {
+            ...conv,
+            members: updatedMembers,
+            avatar: isPrivateWithUpdatedUser
+              ? (payload.avatar !== undefined ? payload.avatar : conv.avatar)
+              : conv.avatar,
+          };
+        }),
+      );
+
+      setSelectedConversation((current) => {
+        if (!current) return current;
+        const hasMember = current.members?.some((m) => m.user_id === updatedUserId);
+        if (!hasMember) return current;
+
+        const updatedMembers = current.members.map((m) =>
+          m.user_id === updatedUserId
+            ? {
+                ...m,
+                username: payload.username || m.username,
+                avatar: payload.avatar !== undefined ? payload.avatar : m.avatar,
+              }
+            : m,
+        );
+
+        const isPrivateWithUpdatedUser =
+          current.conversation_type === 'PRIVATE' &&
+          current.members?.some((m) => m.user_id === updatedUserId && m.user_id !== currentAuthUserId);
+
+        return {
+          ...current,
+          members: updatedMembers,
+          avatar: isPrivateWithUpdatedUser
+            ? (payload.avatar !== undefined ? payload.avatar : current.avatar)
+            : current.avatar,
+        };
+      });
+    };
+
+    registerListener('message', handleUserUpdated);
+    return () => removeListener('message', handleUserUpdated);
+  }, []);
+
   // ---------------------------------------------------------------------------
-  // NEW: conversation_deleted — another member deleted the conversation (or the
-  // current user's deletion was confirmed by the WS broadcast). Remove it from
-  // the list and deselect it if it's currently open.
+  // Real-time unread_count sync.
+  // ---------------------------------------------------------------------------
+  const selectedConversationRef = useRef(null);
+  selectedConversationRef.current = selectedConversation;
+
+  useEffect(() => {
+    const handleNewMessageUnread = (payload) => {
+      if (payload?.type !== 'new_message' || !payload.message) return;
+      const incomingConversationId = Number(payload.message.conversation);
+      const activeConversationId = Number(selectedConversationRef.current?.id ?? null);
+      const currentUserId = Number(userRef.current?.id ?? null);
+      const senderId = Number(payload.message.sender_id);
+
+      // Do not increment unread for messages sent by the current user
+      if (Number.isFinite(currentUserId) && senderId === currentUserId) return;
+
+      // Only update conversations OTHER than the one currently open.
+      if (incomingConversationId === activeConversationId) return;
+
+      setConversations((current) => {
+        const exists = current.some((conv) => conv.id === incomingConversationId);
+        if (!exists) {
+          loadConversations();
+          return current;
+        }
+        return current.map((conv) =>
+          conv.id === incomingConversationId
+            ? {
+                ...conv,
+                unread_count: (conv.unread_count ?? 0) + 1,
+                updated_at: payload.message.created_at || new Date().toISOString(),
+              }
+            : conv,
+        );
+      });
+    };
+
+    registerListener('message', handleNewMessageUnread);
+    return () => removeListener('message', handleNewMessageUnread);
+  }, []);
+
+  // ---------------------------------------------------------------------------
+  // conversation_deleted — another member deleted the conversation
   // ---------------------------------------------------------------------------
   useEffect(() => {
     const handleConversationDeleted = (payload) => {
@@ -152,6 +313,15 @@ export function ConversationProvider({ children }) {
     registerListener('message', handleConversationDeleted);
     return () => removeListener('message', handleConversationDeleted);
   }, []);
+
+  // ---------------------------------------------------------------------------
+  // When the user selects/opens a conversation, mark it as read both
+  // optimistically in state and persistently on the backend database.
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    if (!selectedConversation?.id) return;
+    markConversationAsRead(selectedConversation.id);
+  }, [selectedConversation?.id]);
 
   // Connect/disconnect WebSocket when the selected conversation changes
   useEffect(() => {
@@ -170,12 +340,16 @@ export function ConversationProvider({ children }) {
     loading,
     error,
     refreshConversations,
+    markConversationAsRead,
     createConversation,
     createGroup,
     deleteConversation,
     presenceMap,
     setPresenceMap,
-  }), [conversations, selectedConversation, loading, error, presenceMap]);
+    favoriteIds,
+    toggleFavorite,
+    isFavorite,
+  }), [conversations, selectedConversation, loading, error, presenceMap, favoriteIds]);
 
   return <ConversationContext.Provider value={value}>{children}</ConversationContext.Provider>;
 }

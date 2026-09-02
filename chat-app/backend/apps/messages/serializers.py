@@ -56,9 +56,15 @@ class AttachmentSerializer(serializers.ModelSerializer):
     def get_file_url(self, obj: Attachment) -> str | None:
         """Return an absolute URL for the file so the frontend can download it."""
         request = self.context.get('request')
-        if obj.file and request:
-            return request.build_absolute_uri(obj.file.url)
-        return obj.file.url if obj.file else None
+        if obj.file:
+            try:
+                url = obj.file.storage.url(obj.file.name, resource_type=obj.resource_type)
+            except TypeError:
+                url = obj.file.url
+            if request:
+                return request.build_absolute_uri(url)
+            return url
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -82,6 +88,7 @@ class MessageSerializer(serializers.ModelSerializer):
     sender_avatar   = serializers.SerializerMethodField()
     attachments     = AttachmentSerializer(many=True, read_only=True)
     reply_to        = serializers.SerializerMethodField()
+    read_by         = serializers.SerializerMethodField()
 
     class Meta:
         model  = Message
@@ -95,11 +102,15 @@ class MessageSerializer(serializers.ModelSerializer):
             'message_type',
             'reply_to',
             'attachments',
+            'read_by',
             'is_edited',
             'edited_at',
             'is_deleted',
             'created_at',
         )
+
+    def get_read_by(self, obj: Message) -> list[int]:
+        return [r.user_id for r in obj.read_receipts.all()]
 
     def get_sender_avatar(self, obj: Message) -> str | None:
         """
@@ -211,6 +222,7 @@ class ConversationMessageSerializer(serializers.ModelSerializer):
     sender_avatar   = serializers.SerializerMethodField()
     attachments     = AttachmentSerializer(many=True, read_only=True)
     reply_to        = serializers.SerializerMethodField()
+    read_by         = serializers.SerializerMethodField()
 
     class Meta:
         model  = Message
@@ -224,11 +236,15 @@ class ConversationMessageSerializer(serializers.ModelSerializer):
             'message_type',
             'reply_to',
             'attachments',
+            'read_by',
             'is_edited',
             'edited_at',
             'is_deleted',
             'created_at',
         )
+
+    def get_read_by(self, obj: Message) -> list[int]:
+        return [r.user_id for r in obj.read_receipts.all()]
 
     def get_sender_avatar(self, obj: Message) -> str | None:
         request = self.context.get('request')

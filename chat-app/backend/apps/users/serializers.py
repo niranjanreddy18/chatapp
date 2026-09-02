@@ -31,22 +31,35 @@ class ProfileSerializer(serializers.ModelSerializer):
 class UpdateProfileSerializer(serializers.ModelSerializer):
     """Serializer for updating profile fields that are user-editable."""
 
+    username = serializers.CharField(required=False, max_length=150)
+    avatar = serializers.ImageField(required=False, allow_null=True)
+
     class Meta:
         model = Profile
-        fields = ('avatar', 'bio', 'status_message')
+        fields = ('avatar', 'bio', 'status_message', 'username')
 
     def validate_bio(self, value):
-        if len(value) > 300:
+        if value and len(value) > 300:
             raise serializers.ValidationError('Bio must be 300 characters or fewer.')
-        return value
+        return value or ''
 
     def validate_status_message(self, value):
-        if len(value) > 100:
+        if value and len(value) > 100:
             raise serializers.ValidationError('Status message must be 100 characters or fewer.')
+        return value or ''
+
+    def validate_username(self, value):
+        if not value or not value.strip():
+            raise serializers.ValidationError('Username cannot be empty.')
+        value = value.strip()
+        user = self.instance.user if self.instance else None
+        user_pk = user.pk if user else None
+        if User.objects.filter(username__iexact=value).exclude(pk=user_pk).exists():
+            raise serializers.ValidationError('This username is already taken.')
         return value
 
     def validate_avatar(self, value):
-        if value is None:
+        if not value:
             return value
 
         allowed_formats = {'JPEG', 'JPG', 'PNG', 'WEBP'}
@@ -60,6 +73,19 @@ class UpdateProfileSerializer(serializers.ModelSerializer):
         if extension not in allowed_formats:
             raise serializers.ValidationError('Unsupported image format. Use JPG, PNG, or WEBP.')
         return value
+
+    def update(self, instance, validated_data):
+        username = validated_data.pop('username', None)
+        if username and username != instance.user.username:
+            instance.user.username = username
+            instance.user.save(update_fields=['username'])
+
+        if 'avatar' in validated_data and validated_data['avatar'] is None:
+            if instance.avatar:
+                instance.avatar.delete(save=False)
+            instance.avatar = None
+
+        return super().update(instance, validated_data)
 
 
 class CurrentUserProfileSerializer(ProfileSerializer):
@@ -75,14 +101,17 @@ class UserListSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ('id', 'username', 'avatar', 'is_online')
+        fields = ('id', 'username', 'email', 'avatar', 'is_online', 'bio', 'status_message')
 
     def to_representation(self, instance):
         profile = getattr(instance, 'profile', None)
         data = {
             'id': instance.id,
             'username': instance.username,
+            'email': instance.email,
             'avatar': profile.avatar.url if profile and profile.avatar else None,
             'is_online': profile.is_online if profile else False,
+            'bio': profile.bio if profile else '',
+            'status_message': profile.status_message if profile else '',
         }
         return data

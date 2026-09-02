@@ -1,76 +1,99 @@
-/**
- * ConversationEmptyState.jsx
- *
- * Two modes controlled by the `hasConversations` prop:
- *
- * 1. hasConversations=false (new user, zero conversations)
- *    → "No conversations yet." heading
- *    → "Start your first conversation" subtext
- *    → "New Chat" button that dispatches the nexus:open-new-chat custom event,
- *      which ConversationSidebar listens for and uses to open its modal.
- *
- * 2. hasConversations=true (conversations exist but none is selected yet)
- *    → "Select a conversation" heading (original behaviour)
- *
- * The custom-event approach keeps state ownership inside ConversationSidebar
- * without requiring prop-drilling or a new context value.
- */
-
-import { MessageCirclePlus } from 'lucide-react';
+import { MessageSquarePlus, UserPlus, UsersRound, ShieldCheck, Sparkles } from 'lucide-react';
 
 function ConversationEmptyState({ hasConversations = true }) {
   const openNewChat = () => {
-    window.dispatchEvent(new CustomEvent('nexus:open-new-chat'));
+    window.dispatchEvent(new CustomEvent('chatapp:open-new-chat'));
   };
 
-  if (!hasConversations) {
-    return (
-      <div className="flex min-h-[420px] items-center justify-center rounded-[32px] border border-slate-200/70 bg-white/80 p-8 text-center shadow-[0_20px_70px_-35px_rgba(2,6,23,0.5)] backdrop-blur dark:border-slate-800 dark:bg-slate-900/70">
-        <div className="max-w-sm">
-          {/* Icon */}
-          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-sky-500/10 text-sky-500">
-            <MessageCirclePlus size={28} />
+  const openNewGroup = () => {
+    window.dispatchEvent(new CustomEvent('chatapp:open-new-group'));
+  };
+
+  return (
+    <div className="flex h-full w-full flex-col items-center justify-center bg-[#EDECEC] dark:bg-slate-950 p-8 text-center select-none overflow-y-auto">
+      <div className="flex max-w-md flex-col items-center animate-[fadeIn_200ms_ease-out]">
+        {/* ── Modern Abstract Communication Graphic ────────────────────────── */}
+        <div className="relative mb-8 flex h-36 w-36 items-center justify-center">
+          {/* Subtle ambient rings */}
+          <div className="absolute inset-0 rounded-full bg-blue-500/10 dark:bg-blue-500/15 animate-pulse" />
+          <div className="absolute inset-3 rounded-full bg-blue-600/10 dark:bg-blue-600/20" />
+
+          {/* Central graphic composition */}
+          <div className="relative flex h-24 w-24 items-center justify-center rounded-3xl bg-gradient-to-tr from-blue-600 to-indigo-600 text-white shadow-xl shadow-blue-600/25">
+            <svg
+              viewBox="0 0 48 48"
+              fill="none"
+              className="h-12 w-12 text-white"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              {/* Primary Chat Bubble */}
+              <path d="M14 36v-6H10a6 6 0 0 1-6-6V12a6 6 0 0 1 6-6h24a6 6 0 0 1 6 6v12a6 6 0 0 1-6 6H22l-8 6z" fill="currentColor" fillOpacity="0.15" />
+              {/* Secondary overlapping Chat Bubble */}
+              <path d="M34 18h4a4 4 0 0 1 4 4v12a4 4 0 0 1-4 4h-4v4l-6-4h-8" />
+              {/* Conversation dots */}
+              <circle cx="15" cy="18" r="1.5" fill="currentColor" />
+              <circle cx="22" cy="18" r="1.5" fill="currentColor" />
+              <circle cx="29" cy="18" r="1.5" fill="currentColor" />
+            </svg>
           </div>
 
-          {/* Heading */}
-          <h2 className="mt-6 text-2xl font-semibold text-slate-900 dark:text-slate-100">
-            No conversations yet
-          </h2>
+          {/* Floating decorative elements */}
+          <div className="absolute -top-1 -right-1 flex h-8 w-8 items-center justify-center rounded-full bg-white dark:bg-slate-800 text-emerald-500 shadow-md ring-2 ring-[#EDECEC] dark:ring-slate-950">
+            <span className="h-3 w-3 rounded-full bg-emerald-500 animate-ping opacity-75" />
+            <span className="absolute h-2.5 w-2.5 rounded-full bg-emerald-500" />
+          </div>
 
-          {/* Body */}
-          <p className="mt-3 text-sm leading-relaxed text-slate-600 dark:text-slate-400">
-            Start a private chat with any registered user to begin your experience.
-          </p>
+          <div className="absolute -bottom-2 -left-2 flex h-7 w-7 items-center justify-center rounded-full bg-white dark:bg-slate-800 text-blue-500 shadow-md ring-2 ring-[#EDECEC] dark:ring-slate-950">
+            <Sparkles size={14} className="text-blue-500" />
+          </div>
+        </div>
 
-          {/* CTA */}
+        {/* ── Title & Subtitle ─────────────────────────────────────────────── */}
+        <h2 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-50">
+          Stay connected with your conversations
+        </h2>
+
+        <p className="mt-2.5 text-sm leading-relaxed text-slate-600 dark:text-slate-400">
+          Select a conversation from the sidebar to start chatting, share files, and collaborate in real time.
+        </p>
+
+        {/* ── Quick Action Buttons ────────────────────────────────────────── */}
+        <div className="mt-7 flex flex-wrap items-center justify-center gap-3">
           <button
             id="empty-state-new-chat-btn"
             onClick={openNewChat}
-            className="mt-6 inline-flex items-center gap-2 rounded-2xl bg-sky-600 px-5 py-2.5 text-sm font-medium text-white shadow-[0_10px_30px_-12px_rgba(14,165,233,0.6)] transition-all duration-200 hover:bg-sky-500 active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-sky-500/40"
+            className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-semibold text-white shadow-md shadow-blue-600/25 transition-all duration-150 hover:bg-blue-700 active:scale-95 focus:outline-none"
           >
-            <MessageCirclePlus size={16} />
+            <MessageSquarePlus size={15} />
             New Chat
           </button>
-        </div>
-      </div>
-    );
-  }
 
-  // Default: conversations exist but none selected
-  return (
-    <div className="flex min-h-[420px] items-center justify-center rounded-[32px] border border-slate-200/70 bg-white/80 p-8 text-center shadow-[0_20px_70px_-35px_rgba(2,6,23,0.5)] backdrop-blur dark:border-slate-800 dark:bg-slate-900/70">
-      <div className="max-w-md">
-        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-sky-500/10 text-sky-500">
-          <svg viewBox="0 0 24 24" className="h-7 w-7" fill="none" stroke="currentColor" strokeWidth="1.8">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M8 10h8M8 14h5m-7 4h10a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2Z" />
-          </svg>
+          <button
+            id="empty-state-new-group-btn"
+            onClick={openNewGroup}
+            className="inline-flex items-center gap-2 rounded-xl bg-white dark:bg-slate-800 px-4 py-2.5 text-xs font-semibold text-slate-800 dark:text-slate-200 shadow-sm border border-slate-200 dark:border-slate-700 transition-all duration-150 hover:bg-slate-50 dark:hover:bg-slate-700 active:scale-95 focus:outline-none"
+          >
+            <UsersRound size={15} />
+            Create Group
+          </button>
+
+          <button
+            onClick={openNewChat}
+            className="inline-flex items-center gap-2 rounded-xl bg-white dark:bg-slate-800 px-4 py-2.5 text-xs font-semibold text-slate-800 dark:text-slate-200 shadow-sm border border-slate-200 dark:border-slate-700 transition-all duration-150 hover:bg-slate-50 dark:hover:bg-slate-700 active:scale-95 focus:outline-none"
+          >
+            <UserPlus size={15} />
+            Add Contact
+          </button>
         </div>
-        <h2 className="mt-5 text-2xl font-semibold text-slate-900 dark:text-slate-100">
-          Select a conversation to start chatting.
-        </h2>
-        <p className="mt-3 text-sm text-slate-600 dark:text-slate-400">
-          Choose an existing thread or create a new conversation from the sidebar to begin your experience.
-        </p>
+
+        {/* ── Security / Encryption Badge ─────────────────────────────────── */}
+        <div className="mt-12 flex items-center gap-1.5 text-xs font-medium text-slate-400 dark:text-slate-500">
+          <ShieldCheck size={14} className="text-emerald-600 dark:text-emerald-400" />
+          <span>End-to-end encrypted workspace</span>
+        </div>
       </div>
     </div>
   );
