@@ -3,6 +3,9 @@ from django.db import models
 from django.utils import timezone
 
 
+from cloudinary_storage.storage import MediaCloudinaryStorage
+
+
 class Conversation(models.Model):
     """Represents a private or group conversation."""
 
@@ -12,7 +15,7 @@ class Conversation(models.Model):
 
     name = models.CharField(max_length=255, blank=True, null=True)
     conversation_type = models.CharField(max_length=20, choices=ConversationType.choices, default=ConversationType.PRIVATE)
-    avatar = models.ImageField(upload_to='conversation_avatars/', blank=True, null=True)
+    avatar = models.ImageField(upload_to='conversation_avatars/', storage=MediaCloudinaryStorage(), blank=True, null=True)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='created_conversations')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

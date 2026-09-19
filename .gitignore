@@ -12,29 +12,29 @@ env/
 ENV/
 
 # Django generated / runtime
-backend/.env
-backend/.env.example
-backend/db.sqlite3
+chat-app/backend/.env
+chat-app/backend/.env.example
+chat-app/backend/db.sqlite3
 *.sqlite3
-backend/staticfiles/
-backend/media/
+chat-app/backend/staticfiles/
+chat-app/backend/media/
 
 # Test & lint caches
-backend/.pytest_cache/
-backend/.mypy_cache/
-backend/.ruff_cache/
+chat-app/backend/.pytest_cache/
+chat-app/backend/.mypy_cache/
+chat-app/backend/.ruff_cache/
 
 # Logs
 *.log
-backend/*.log
+chat-app/backend/*.log
 
 # ─── Node / Vite / React ───────────────────────────────────────────────────
-frontend/node_modules/
-frontend/dist/
-frontend/.vite/
-frontend/.env
-frontend/.env.local
-frontend/.env.*.local
+chat-app/frontend/node_modules/
+chat-app/frontend/dist/
+chat-app/frontend/.vite/
+chat-app/frontend/.env
+chat-app/frontend/.env.local
+chat-app/frontend/.env.*.local
 
 # ─── IDE / Editor ───────────────────────────────────────────────────────────
 .idea/

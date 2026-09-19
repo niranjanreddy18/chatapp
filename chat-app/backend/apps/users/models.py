@@ -3,11 +3,14 @@ from django.db import models
 from django.utils import timezone
 
 
+from cloudinary_storage.storage import MediaCloudinaryStorage
+
+
 class Profile(models.Model):
     """User profile information linked one-to-one to Django's built-in user."""
 
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='profile')
-    avatar = models.ImageField(upload_to='avatars/', blank=True, null=True)
+    avatar = models.ImageField(upload_to='avatars/', storage=MediaCloudinaryStorage(), blank=True, null=True)
     bio = models.TextField(blank=True, default='')
     status_message = models.CharField(max_length=100, blank=True, default='Hello there!')
     is_online = models.BooleanField(default=False)
