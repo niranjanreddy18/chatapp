@@ -46,6 +46,33 @@ import Modal from '../common/Modal';
 
 const QUICK_EMOJIS = ['😊', '👍', '❤️', '😂', '🔥', '🎉', '🚀', '👏', '🙌', '💯'];
 
+async function downloadFile(url, fileName) {
+  if (!url) return;
+  try {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+    const blob = await response.blob();
+    const blobUrl = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = blobUrl;
+    link.download = fileName || 'download';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(blobUrl);
+  } catch (err) {
+    console.error('File download failed, falling back to direct link:', err);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = fileName || 'download';
+    link.target = '_blank';
+    link.rel = 'noreferrer';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }
+}
+
 function ImageLightbox({ media, onClose }) {
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -74,16 +101,14 @@ function ImageLightbox({ media, onClose }) {
           )}
         </div>
         <div className="flex items-center gap-3">
-          <a
-            href={media.file_url}
-            download={media.file_name}
-            target="_blank"
-            rel="noreferrer"
-            className="flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20 transition"
+          <button
+            type="button"
+            onClick={() => downloadFile(media.file_url, media.file_name || 'photo.jpg')}
+            className="flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20 transition cursor-pointer"
             title="Download full size"
           >
             <Download size={18} />
-          </a>
+          </button>
           <button
             onClick={onClose}
             className="flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20 transition"
@@ -252,12 +277,18 @@ function VideoAttachmentItem({
 }
 
 function DocumentAttachmentItem({ attachment }) {
+  const handleDownload = (e) => {
+    e.preventDefault();
+    downloadFile(attachment.file_url, attachment.file_name || 'document');
+  };
+
   return (
     <a
       href={attachment.file_url}
+      onClick={handleDownload}
       target="_blank"
       rel="noreferrer"
-      className="mt-1 inline-flex items-center gap-2.5 rounded-xl border border-slate-200/80 bg-white/90 px-3.5 py-2 text-xs font-medium text-slate-800 shadow-sm transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 max-w-full"
+      className="mt-1 inline-flex items-center gap-2.5 rounded-xl border border-slate-200/80 bg-white/90 px-3.5 py-2 text-xs font-medium text-slate-800 shadow-sm transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 max-w-full cursor-pointer"
     >
       <FileText size={16} className="text-blue-600 shrink-0" />
       <span className="truncate max-w-[180px]">{attachment.file_name}</span>
@@ -421,19 +452,19 @@ function AudioAttachmentItem({ attachment, isMine, statusElement }) {
                 {playbackRate}x
               </button>
 
-              <a
-                href={fileUrl}
-                download={attachment.file_name || 'voice-message.webm'}
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={(e) => e.stopPropagation()}
-                className={`p-0.5 rounded transition ${
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  downloadFile(fileUrl, attachment.file_name || 'voice-message.webm');
+                }}
+                className={`p-0.5 rounded transition cursor-pointer ${
                   isMine ? 'hover:text-white/80' : 'hover:text-blue-600'
                 }`}
                 title="Download audio"
               >
                 <Download size={13} />
-              </a>
+              </button>
             </div>
           </div>
         </div>

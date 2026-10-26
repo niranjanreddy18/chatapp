@@ -6,7 +6,6 @@ cbor2==6.1.4
 certifi==2026.7.22
 cffi==2.1.1
 channels==4.3.2
-channels_redis==4.3.0
 click==8.4.2
 cloudinary==1.46.0
 colorama==0.4.6
@@ -23,7 +22,6 @@ h11==0.16.0
 hyperlink==21.0.0
 idna==3.18
 Incremental==24.11.0
-msgpack==1.2.1
 packaging==26.2
 charset-normalizer==3.5.1
 django-cloudinary-storage==0.3.0
@@ -34,7 +32,6 @@ pycparser==3.0
 PyJWT==2.13.0
 pyOpenSSL==26.4.0
 python-decouple==3.8
-redis==8.1.0
 service-identity==26.1.0
 six==1.17.0
 sqlparse==0.5.5

@@ -3,12 +3,10 @@ import {
   MessageSquare,
   Users,
   UsersRound,
-  Bell,
   Settings,
   Sun,
   Moon,
   LogOut,
-  CheckCircle2,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
@@ -23,10 +21,6 @@ function NavRail({ activeTab = 'chats', onSelectTab }) {
   // Profile menu popover
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const profileMenuRef = useRef(null);
-
-  // Notifications toggle status
-  const [notificationsEnabled, setNotificationsEnabled] = useState(true);
-  const [showNotificationsToast, setShowNotificationsToast] = useState(false);
 
   // Total unread count across all conversations
   const totalUnreadCount = conversations.reduce(
@@ -47,12 +41,6 @@ function NavRail({ activeTab = 'chats', onSelectTab }) {
   }, [profileMenuOpen]);
 
   const handleTabClick = (tabId) => {
-    if (tabId === 'notifications') {
-      setNotificationsEnabled((prev) => !prev);
-      setShowNotificationsToast(true);
-      setTimeout(() => setShowNotificationsToast(false), 2500);
-      return;
-    }
     if (onSelectTab) {
       onSelectTab(tabId);
     }
@@ -76,12 +64,6 @@ function NavRail({ activeTab = 'chats', onSelectTab }) {
       icon: UsersRound,
     },
     {
-      id: 'notifications',
-      label: notificationsEnabled ? 'Notifications On' : 'Notifications Muted',
-      icon: Bell,
-      activeDot: !notificationsEnabled,
-    },
-    {
       id: 'settings',
       label: 'Settings',
       icon: Settings,
@@ -89,30 +71,14 @@ function NavRail({ activeTab = 'chats', onSelectTab }) {
   ];
 
   return (
-    <>
-      <aside
+    <aside
         aria-label="Sidebar Navigation"
         className="flex h-full w-[70px] flex-col items-center justify-between border-r border-slate-800/80 bg-slate-950 py-3.5 text-slate-400 select-none shrink-0 z-30"
       >
-        {/* ── Top Brand Icon ──────────────────────────────────────────────── */}
+        {/* ── Main Nav Icons ────────────────────────────────────────────── */}
         <div className="flex flex-col items-center gap-4">
-          <button
-            onClick={() => handleTabClick('chats')}
-            className="group relative flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-lg shadow-blue-600/30 transition-all duration-200 hover:scale-105 active:scale-95 focus:outline-none"
-            title="ChatApp"
-          >
-            <div className="relative">
-              <MessageSquare size={22} className="fill-white/20 stroke-[2.2]" />
-              <span className="absolute -top-1 -right-1 flex h-2.5 w-2.5">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-sky-300 opacity-60" />
-                <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-sky-200" />
-              </span>
-            </div>
-          </button>
-
-          {/* ── Main Nav Icons ────────────────────────────────────────────── */}
           <nav className="mt-1 flex flex-col items-center gap-1.5" role="navigation">
-            {navItems.map(({ id, label, icon: Icon, badge, activeDot }) => {
+            {navItems.map(({ id, label, icon: Icon, badge }) => {
               const isActive = activeTab === id;
               return (
                 <button
@@ -144,11 +110,6 @@ function NavRail({ activeTab = 'chats', onSelectTab }) {
                     <span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-blue-600 px-1 text-[10px] font-bold text-white shadow-sm ring-2 ring-slate-950">
                       {badge}
                     </span>
-                  )}
-
-                  {/* Mute/Alert dot */}
-                  {activeDot && (
-                    <span className="absolute top-2 right-2 h-2 w-2 rounded-full bg-amber-500 ring-2 ring-slate-950" />
                   )}
                 </button>
               );
@@ -218,15 +179,6 @@ function NavRail({ activeTab = 'chats', onSelectTab }) {
           )}
         </div>
       </aside>
-
-      {/* ── Toast for Notifications Toggle ─────────────────────────────────── */}
-      {showNotificationsToast && (
-        <div className="fixed bottom-6 left-20 z-50 flex items-center gap-2 rounded-xl bg-slate-900/95 px-4 py-2.5 text-xs font-medium text-white shadow-xl border border-slate-800 animate-[fadeIn_150ms_ease-out]">
-          <CheckCircle2 size={16} className="text-blue-400" />
-          <span>{notificationsEnabled ? 'Notifications enabled' : 'Notifications muted'}</span>
-        </div>
-      )}
-    </>
   );
 }
 
