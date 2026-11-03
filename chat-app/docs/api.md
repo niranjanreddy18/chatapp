@@ -219,3 +219,19 @@ All API responses use a consistent JSON envelope.
   - `message_id` (integer, required)
   - `upload_id` (UUID string, optional — client idempotency key for safe retries)
 - **Success response (`201 Created`):** serialized attachment object
+
+---
+
+### System & Health (`/api/health/`)
+
+#### 22. Health Check
+- **Method:** `GET`
+- **URL:** `/api/health/`
+- **Authentication:** None (public)
+- **Success response (`200 OK`):**
+  ```json
+  {
+    "status": "ok"
+  }
+  ```
+  A lightweight, zero-database health check endpoint intended for uptime monitors, load balancers, and external schedulers (e.g. cron-job.org, UptimeRobot) to mitigate cold starts on platforms with inactivity timeouts like Render.

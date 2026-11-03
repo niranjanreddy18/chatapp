@@ -21,7 +21,7 @@ docker compose up --build
 
 ### Services
 
-- `backend`: Django + Gunicorn + Daphne for ASGI/WebSockets.
+- `backend`: Django + Daphne ASGI / WebSockets.
 - `frontend`: Vite preview server.
 - `db`: PostgreSQL.
 
@@ -41,21 +41,68 @@ cd backend && pip install -r requirements.txt && python manage.py collectstatic 
 ### Start Command
 
 ```bash
-gunicorn config.asgi:application -k uvicorn.workers.UvicornWorker -b 0.0.0.0:$PORT --workers 1 --log-level info
+daphne -b 0.0.0.0 -p $PORT config.asgi:application
 ```
 
 ### Required environment variables
 
 - `SECRET_KEY`
 - `DEBUG=False`
-- `ALLOWED_HOSTS`
-- `CORS_ALLOWED_ORIGINS`
-- `CSRF_TRUSTED_ORIGINS`
-- `DATABASE_URL`
+- `ALLOWED_HOSTS` (e.g. `your-app.onrender.com`)
+- `CORS_ALLOWED_ORIGINS` (e.g. `https://your-frontend.vercel.app`)
+- `CSRF_TRUSTED_ORIGINS` (e.g. `https://your-frontend.vercel.app`)
+- `DATABASE_URL` (PostgreSQL connection string)
 - `SECURE_SSL_REDIRECT=True`
 - `SECURE_HSTS_SECONDS=31536000`
 - `SESSION_COOKIE_SECURE=True`
 - `CSRF_COOKIE_SECURE=True`
+
+---
+
+## Render Cold-Start Mitigation
+
+### Problem
+Render's free web services spin down (sleep) after **15 minutes of inactivity**. When a user subsequently visits the application, the web service must cold-start from disk, introducing a 30–60 second latency spike on the initial request.
+
+### Architecture: External Pinging
+To keep the backend warm without introducing complex internal schedulers, infinite threading loops, or worker infrastructure, periodic requests are handled **externally**:
+
+```text
+External Uptime Scheduler (e.g. cron-job.org / UptimeRobot)
+        |
+        | GET https://<backend-domain>/api/health/ (every 10–14 mins)
+        v
+Render Django Web Service
+        |
+        v
+HTTP 200 {"status": "ok"} (sub-millisecond, zero database overhead)
+```
+
+### Endpoint Details
+- **URL**: `https://<backend-domain>/api/health/`
+- **Method**: `GET`
+- **Authentication**: None (publicly accessible)
+- **Response**: `{"status": "ok"}`
+- **Overhead**: Pure JSON, zero database queries, zero external network calls.
+
+### Recommended Configuration
+Configure a free external uptime monitor or cron service such as:
+1. **[cron-job.org](https://cron-job.org)** (Recommended, 100% free):
+   - **Target URL**: `https://<backend-domain>/api/health/`
+   - **Method**: `GET`
+   - **Schedule**: Every `12` minutes (or every `10` to `14` minutes).
+   - **Active Window** (Optional): Limit to business/daytime hours (e.g., 08:00–22:00 UTC) to conserve monthly free hours.
+2. **[UptimeRobot](https://uptimerobot.com)**:
+   - **Monitor Type**: HTTP(s)
+   - **Target URL**: `https://<backend-domain>/api/health/`
+   - **Monitoring Interval**: 10–15 minutes.
+
+### Platform Limitations & Considerations
+> [!NOTE]
+> - **Monthly Free Hours Cap**: Render accounts receive 750 free instance hours per month across all free services. Keeping a single service running 24/7 utilizes ~720–744 hours per month. If multiple free services run under the same account, consider scheduling the pinger only during daytime/demo hours to avoid exhausting monthly free hours.
+> - **Not a 100% Zero Cold-Start Guarantee**: While periodic external traffic mitigates inactivity-based sleep, hosting platforms periodically restart, deploy, and relocate free containers regardless of incoming traffic. Occasional brief cold starts may still occur after platform updates.
+
+---
 
 ## Vercel frontend deployment
 
@@ -71,8 +118,8 @@ npm install && npm run build
 
 ### Environment variables
 
-- `VITE_API_BASE_URL`
-- `VITE_WS_BASE_URL`
+- `VITE_API_BASE_URL`: `https://<backend-domain>/api`
+- `VITE_WS_BASE_URL`: `wss://<backend-domain>`
 
 ## PostgreSQL
 
@@ -81,31 +128,11 @@ npm install && npm run build
   - `postgres://postgres:postgres@db:5432/nexus_chat_db`
 - Production PostgreSQL should be provisioned as a managed database.
 
-## Environment variables
-
-### Frontend
-
-- `VITE_API_BASE_URL`: backend REST API base URL
-- `VITE_WS_BASE_URL`: backend WebSocket base URL
-
-### Backend
-
-- `SECRET_KEY`
-- `DEBUG`
-- `ALLOWED_HOSTS`
-- `CORS_ALLOWED_ORIGINS`
-- `CSRF_TRUSTED_ORIGINS`
-- `DATABASE_URL`
-- `SECURE_SSL_REDIRECT`
-- `SECURE_HSTS_SECONDS`
-- `SESSION_COOKIE_SECURE`
-- `CSRF_COOKIE_SECURE`
-
 ## Production configuration
 
 - Debug disabled (`DEBUG=False`).
 - Static files served via `whitenoise`.
-- Support for ASGI/WebSocket traffic.
+- Support for ASGI/WebSocket traffic via Daphne.
 - Strong security headers enabled.
 - PostgreSQL configured through `DATABASE_URL`.
 - WebSocket events use the in-memory Django Channels layer and are limited to a single backend process.
