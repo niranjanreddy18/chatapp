@@ -1,5 +1,6 @@
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
 User = get_user_model()
@@ -18,12 +19,14 @@ class RegisterSerializer(serializers.ModelSerializer):
         }
 
     def validate_username(self, value):
-        if User.objects.filter(username=value).exists():
+        value = value.strip()
+        if User.objects.filter(username__iexact=value).exists():
             raise serializers.ValidationError('Username is already taken.')
         return value
 
     def validate_email(self, value):
-        if User.objects.filter(email=value).exists():
+        value = value.strip().lower()
+        if User.objects.filter(email__iexact=value).exists():
             raise serializers.ValidationError('Email is already registered.')
         return value
 
@@ -34,10 +37,27 @@ class RegisterSerializer(serializers.ModelSerializer):
         if password != confirm_password:
             raise serializers.ValidationError({'confirm_password': 'Passwords do not match.'})
 
+        username = attrs.get('username') or ''
+        email = attrs.get('email') or ''
+
         # Give Django the pending user attributes so its configured validators
         # can reject passwords similar to the username or email as well.
-        user = User(username=attrs.get('username'), email=attrs.get('email'))
-        validate_password(password, user=user)
+        user = User(username=username, email=email)
+        try:
+            validate_password(password, user=user)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError({'password': list(exc.messages)})
+
+        # Also reject passwords that directly contain the username or email prefix
+        username_lower = username.strip().lower()
+        email_local = email.split('@')[0].strip().lower()
+        password_lower = (password or '').lower()
+        if (len(username_lower) >= 3 and username_lower in password_lower) or (
+            len(email_local) >= 3 and email_local in password_lower
+        ):
+            raise serializers.ValidationError(
+                {'password': ['The password is too similar to the username or email.']}
+            )
 
         return attrs
 

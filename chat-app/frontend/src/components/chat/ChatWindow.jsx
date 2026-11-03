@@ -16,21 +16,16 @@ import {
   RefreshCw,
   Eraser,
   AlertTriangle,
-  Video,
   Search,
   Smile,
   Mic,
-  MicOff,
-  VideoOff,
   Check,
   CheckCheck,
   ArrowLeft,
   Info,
-  PhoneOff,
   Plus,
   Play,
   ImageOff,
-  User,
   Mail,
   Shield,
   Pause,
@@ -297,7 +292,7 @@ function DocumentAttachmentItem({ attachment }) {
   );
 }
 
-function AudioAttachmentItem({ attachment, isMine, statusElement }) {
+function AudioAttachmentItem({ attachment, isMine }) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -500,7 +495,6 @@ function ChatWindow({ onBackMobile }) {
     hasMore,
     page,
     typingUsers,
-    connectionStatus,
     startTyping,
     stopTyping,
     clearChat,
@@ -529,10 +523,6 @@ function ChatWindow({ onBackMobile }) {
   // Lightbox preview modal state
   const [lightboxMedia, setLightboxMedia] = useState(null);
 
-  // Active call modal state
-  const [activeCall, setActiveCall] = useState(null); // { type: 'voice' | 'video', isMuted: false, isVideoOff: false }
-  const [callDuration, setCallDuration] = useState(0);
-
   // Contact Info modal
   const [showContactInfo, setShowContactInfo] = useState(false);
   const [viewingMemberProfile, setViewingMemberProfile] = useState(null);
@@ -548,7 +538,6 @@ function ChatWindow({ onBackMobile }) {
   const fileInputRef = useRef(null);
   const docInputRef = useRef(null);
   const typingStopTimerRef = useRef(null);
-  const callTimerRef = useRef(null);
 
   // Voice recording state & refs
   const [isRecording, setIsRecording] = useState(false);
@@ -722,19 +711,6 @@ function ChatWindow({ onBackMobile }) {
     }
   }, [draft]);
 
-  // Call timer effect
-  useEffect(() => {
-    if (activeCall) {
-      setCallDuration(0);
-      callTimerRef.current = setInterval(() => {
-        setCallDuration((prev) => prev + 1);
-      }, 1000);
-    } else {
-      clearInterval(callTimerRef.current);
-    }
-    return () => clearInterval(callTimerRef.current);
-  }, [activeCall]);
-
   // Close menus on outside click
   useEffect(() => {
     const handleClickOutside = (e) => {
@@ -872,6 +848,9 @@ function ChatWindow({ onBackMobile }) {
   const handleFileSelect = (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
+    if (pendingFile?.previewUrl) {
+      URL.revokeObjectURL(pendingFile.previewUrl);
+    }
     const previewUrl = URL.createObjectURL(file);
     setPendingFile({ file, previewUrl });
     event.target.value = '';
@@ -938,12 +917,6 @@ function ChatWindow({ onBackMobile }) {
         m.sender_username?.toLowerCase().includes(q)
     );
   }, [messages, chatSearchQuery]);
-
-  const formatCallTime = (seconds) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-  };
 
   if (!selectedConversation) {
     return (
@@ -1339,7 +1312,6 @@ function ChatWindow({ onBackMobile }) {
                                   key={att.id}
                                   attachment={att}
                                   isMine={isMine}
-                                  statusElement={statusElement}
                                 />
                               );
                             }
@@ -1702,74 +1674,6 @@ function ChatWindow({ onBackMobile }) {
           )}
         </div>
       </div>
-
-      {/* ── Active Call Modal ────────────────────────────────────────────────── */}
-      {activeCall && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-md animate-[fadeIn_150ms_ease-out]">
-          <div className="w-full max-w-sm rounded-3xl border border-slate-800 bg-slate-900 p-6 text-center text-white shadow-2xl">
-            <div className="relative mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-slate-800 ring-4 ring-blue-500/30">
-              <Avatar name={conversationName} src={conversationAvatar} size="xl" />
-              {activeCall.type === 'video' && !activeCall.isVideoOff && (
-                <span className="absolute -top-1 -right-1 flex h-4 w-4">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                  <span className="relative inline-flex rounded-full h-4 w-4 bg-emerald-500" />
-                </span>
-              )}
-            </div>
-
-            <h3 className="text-lg font-bold">{conversationName}</h3>
-            <p className="text-xs text-slate-400 mt-0.5">
-              {activeCall.type === 'video' ? 'Encrypted Video Call' : 'Encrypted Voice Call'}
-            </p>
-            <p className="mt-2 text-sm font-semibold text-blue-400 tabular-nums">
-              {formatCallTime(callDuration)}
-            </p>
-
-            <div className="mt-8 flex items-center justify-center gap-4">
-              {/* Mute Button */}
-              <button
-                onClick={() =>
-                  setActiveCall((prev) => ({ ...prev, isMuted: !prev.isMuted }))
-                }
-                className={`flex h-12 w-12 items-center justify-center rounded-full transition ${
-                  activeCall.isMuted
-                    ? 'bg-amber-500/20 text-amber-400'
-                    : 'bg-slate-800 text-slate-200 hover:bg-slate-700'
-                }`}
-                title={activeCall.isMuted ? 'Unmute' : 'Mute'}
-              >
-                {activeCall.isMuted ? <MicOff size={20} /> : <Mic size={20} />}
-              </button>
-
-              {/* Video Toggle Button (for video calls) */}
-              {activeCall.type === 'video' && (
-                <button
-                  onClick={() =>
-                    setActiveCall((prev) => ({ ...prev, isVideoOff: !prev.isVideoOff }))
-                  }
-                  className={`flex h-12 w-12 items-center justify-center rounded-full transition ${
-                    activeCall.isVideoOff
-                      ? 'bg-amber-500/20 text-amber-400'
-                      : 'bg-slate-800 text-slate-200 hover:bg-slate-700'
-                  }`}
-                  title={activeCall.isVideoOff ? 'Turn video on' : 'Turn video off'}
-                >
-                  {activeCall.isVideoOff ? <VideoOff size={20} /> : <Video size={20} />}
-                </button>
-              )}
-
-              {/* End Call Button */}
-              <button
-                onClick={() => setActiveCall(null)}
-                className="flex h-12 w-12 items-center justify-center rounded-full bg-rose-600 text-white shadow-lg shadow-rose-600/40 hover:bg-rose-700 transition active:scale-95"
-                title="End call"
-              >
-                <PhoneOff size={20} />
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* ── User Profile / Contact Info Modal ───────────────────────────────────────────────── */}
       <Modal

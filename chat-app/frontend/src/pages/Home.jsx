@@ -4,16 +4,14 @@ import ChatWindow from '../components/chat/ChatWindow';
 import { useConversation } from '../context/ConversationContext';
 
 function Home() {
-  const { selectedConversation, setSelectedConversation, conversations, loading } = useConversation();
-
-  const hasConversations = loading || conversations.length > 0;
+  const { selectedConversation, setSelectedConversation } = useConversation();
 
   return (
     <MainLayout>
       {selectedConversation ? (
         <ChatWindow onBackMobile={() => setSelectedConversation(null)} />
       ) : (
-        <ConversationEmptyState hasConversations={hasConversations} />
+        <ConversationEmptyState />
       )}
     </MainLayout>
   );

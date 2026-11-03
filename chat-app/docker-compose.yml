@@ -1,25 +1,22 @@
-version: '3.9'
-
 services:
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: daphne -b 0.0.0.0 -p 8000 config.asgi:application
     volumes:
       - ./backend/media:/app/media
       - ./backend/staticfiles:/app/staticfiles
     ports:
       - '8000:8000'
     environment:
-      - SECRET_KEY=replace-with-a-secure-value
-      - DEBUG=False
-      - ALLOWED_HOSTS=localhost,127.0.0.1
-      - DATABASE_URL=postgres://postgres:postgres@db:5432/nexus_chat_db
-      - CORS_ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
-      - CSRF_TRUSTED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
-      - SECURE_SSL_REDIRECT=False
-      - SECURE_HSTS_SECONDS=0
+      - SECRET_KEY=${SECRET_KEY:-replace-with-a-secure-value-in-production}
+      - DEBUG=${DEBUG:-False}
+      - ALLOWED_HOSTS=${ALLOWED_HOSTS:-localhost,127.0.0.1}
+      - DATABASE_URL=${DATABASE_URL:-postgres://postgres:postgres@db:5432/nexus_chat_db}
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173}
+      - CSRF_TRUSTED_ORIGINS=${CSRF_TRUSTED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173}
+      - SECURE_SSL_REDIRECT=${SECURE_SSL_REDIRECT:-False}
+      - SECURE_HSTS_SECONDS=${SECURE_HSTS_SECONDS:-0}
     depends_on:
       - db
 
@@ -30,19 +27,19 @@ services:
     ports:
       - '4173:4173'
     environment:
-      - VITE_API_BASE_URL=http://localhost:8000/api
-      - VITE_WS_BASE_URL=ws://localhost:8000
+      - VITE_API_BASE_URL=${VITE_API_BASE_URL:-http://localhost:8000/api}
+      - VITE_WS_BASE_URL=${VITE_WS_BASE_URL:-ws://localhost:8000}
+    depends_on:
+      - backend
 
   db:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: nexus_chat_db
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ${POSTGRES_DB:-nexus_chat_db}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
     volumes:
       - db_data:/var/lib/postgresql/data
 
 volumes:
   db_data:
-  staticfiles:
-  media:

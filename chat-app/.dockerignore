@@ -13,6 +13,11 @@ ENV/
 **/.pytest_cache
 **/.mypy_cache
 **/.ruff_cache
+**/.env
+**/.env.*
+!**/.env.example
+**/*.sqlite3
 frontend/dist
 frontend/.vite
 backend/staticfiles
+backend/media

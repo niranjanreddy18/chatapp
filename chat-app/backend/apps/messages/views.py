@@ -2,21 +2,26 @@
 views.py — Message Module
 ==========================
 
-Five thin view classes. Each view:
+Thin view classes. Each view:
   1. Enforces authentication + permission.
   2. Validates input via a serializer.
-  3. Delegates all business logic to services.py.
+  3. Delegates business logic to services.py.
   4. Returns a consistent response envelope.
-
-No database queries or business rules live here.
 """
 
-from rest_framework import generics, status
-from rest_framework.parsers import MultiPartParser, FormParser
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.response import Response
+import json
+import logging
 
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
 from django.db import IntegrityError
+from rest_framework import generics, status
+from rest_framework.exceptions import NotFound
+from rest_framework.parsers import FormParser, MultiPartParser
+from rest_framework.permissions import IsAuthenticated
+
+from apps.chats.models import ConversationMember
+from apps.common.responses import error_response as _err, success_response as _ok
 
 from . import services
 from .models import Attachment, Message
@@ -30,28 +35,36 @@ from .serializers import (
     SendMessageSerializer,
     UpdateMessageSerializer,
 )
-from asgiref.sync import async_to_sync
-from channels.layers import get_channel_layer
-import json
+
+logger = logging.getLogger(__name__)
 
 
+def _broadcast_to_conversation_members(conversation_id: int, event_payload: dict) -> None:
+    """
+    Broadcast a WebSocket event payload to every active member of `conversation_id`.
 
-# ---------------------------------------------------------------------------
-# Response helpers (matches project-wide convention)
-# ---------------------------------------------------------------------------
-
-def _ok(message: str, data=None, status_code=status.HTTP_200_OK) -> Response:
-    payload = {'success': True, 'message': message}
-    if data is not None:
-        payload['data'] = data
-    return Response(payload, status=status_code)
-
-
-def _err(message: str, errors=None, status_code=status.HTTP_400_BAD_REQUEST) -> Response:
-    return Response(
-        {'success': False, 'message': message, 'errors': errors or {}},
-        status=status_code,
-    )
+    Each connected ChatConsumer subscribes to `user_<id>`, so sending to each
+    active member's user group delivers the event once whether the user is
+    viewing this conversation or another conversation.
+    """
+    try:
+        channel_layer = get_channel_layer()
+        if channel_layer is None:
+            return
+        payload = json.dumps(event_payload)
+        member_ids = list(
+            ConversationMember.objects.filter(
+                conversation_id=conversation_id,
+                is_active=True,
+            ).values_list('user_id', flat=True)
+        )
+        for member_id in member_ids:
+            async_to_sync(channel_layer.group_send)(
+                f'user_{member_id}',
+                {'type': 'chat.message', 'payload': payload},
+            )
+    except Exception:
+        logger.debug('WebSocket broadcast skipped for conversation %s', conversation_id, exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -66,9 +79,6 @@ class SendMessageView(generics.GenericAPIView):
         - Must be authenticated.
         - Must be an active member of the target conversation
           (enforced inside services.send_message via assert_is_member).
-
-    The membership check happens inside the service rather than in a URL-kwarg
-    permission because the conversation_id arrives in the request body here.
     """
 
     permission_classes = [IsAuthenticated]
@@ -89,25 +99,10 @@ class SendMessageView(generics.GenericAPIView):
         )
 
         out = MessageSerializer(message, context={'request': request})
-        try:
-            channel_layer = get_channel_layer()
-            if channel_layer is not None:
-                payload = json.dumps({
-                    'type': 'new_message',
-                    'message': out.data,
-                })
-                from apps.chats.models import ConversationMember
-                member_ids = list(
-                    ConversationMember.objects.filter(conversation_id=message.conversation_id, is_active=True)
-                    .values_list('user_id', flat=True)
-                )
-                for member_id in member_ids:
-                    async_to_sync(channel_layer.group_send)(
-                        f'user_{member_id}',
-                        {'type': 'chat.message', 'payload': payload},
-                    )
-        except Exception:
-            pass
+        _broadcast_to_conversation_members(
+            message.conversation_id,
+            {'type': 'new_message', 'message': out.data},
+        )
 
         return _ok('Message sent successfully.', out.data, status.HTTP_201_CREATED)
 
@@ -124,12 +119,6 @@ class ConversationMessagesView(generics.GenericAPIView):
         - Must be authenticated.
         - Must be an active conversation member (IsConversationMember checks
           the `conversation_id` URL kwarg).
-
-    Query optimisation:
-        - select_related: sender, sender__profile, reply_to, reply_to__sender
-          → eliminates N+1 on user/profile lookups.
-        - prefetch_related: attachments, read_receipts
-          → single IN query for all attachment rows and read receipts.
     """
 
     permission_classes = [IsAuthenticated, IsConversationMember]
@@ -174,10 +163,6 @@ class EditMessageView(generics.GenericAPIView):
     Permissions:
         - Must be authenticated.
         - Must be the original sender (IsSender object-level check).
-
-    Rules enforced in services.edit_message():
-        - Cannot edit a deleted message.
-        - Sets is_edited=True and stamps edited_at.
     """
 
     permission_classes = [IsAuthenticated, IsSender]
@@ -188,14 +173,12 @@ class EditMessageView(generics.GenericAPIView):
             message = (
                 Message.objects
                 .select_related('sender', 'sender__profile', 'reply_to', 'reply_to__sender')
-                .prefetch_related('attachments')
+                .prefetch_related('attachments', 'read_receipts')
                 .get(pk=message_id)
             )
         except Message.DoesNotExist:
-            from rest_framework.exceptions import NotFound
             raise NotFound('Message not found.')
 
-        # Runs IsSender.has_object_permission()
         self.check_object_permissions(self.request, message)
         return message
 
@@ -211,31 +194,15 @@ class EditMessageView(generics.GenericAPIView):
         )
 
         out = MessageSerializer(updated, context={'request': request})
-        try:
-            channel_layer = get_channel_layer()
-            if channel_layer is not None:
-                payload = json.dumps({
-                    'type': 'message_edited',
-                    'message_id': message.id,
-                    'conversation_id': message.conversation_id,
-                    'message': out.data,
-                })
-                async_to_sync(channel_layer.group_send)(
-                    f'chat_{message.conversation_id}',
-                    {'type': 'chat.message', 'payload': payload},
-                )
-                from apps.chats.models import ConversationMember
-                member_ids = list(
-                    ConversationMember.objects.filter(conversation_id=message.conversation_id, is_active=True)
-                    .values_list('user_id', flat=True)
-                )
-                for member_id in member_ids:
-                    async_to_sync(channel_layer.group_send)(
-                        f'user_{member_id}',
-                        {'type': 'chat.message', 'payload': payload},
-                    )
-        except Exception:
-            pass
+        _broadcast_to_conversation_members(
+            message.conversation_id,
+            {
+                'type': 'message_edited',
+                'message_id': message.id,
+                'conversation_id': message.conversation_id,
+                'message': out.data,
+            },
+        )
         return _ok('Message edited successfully.', out.data, status.HTTP_200_OK)
 
 
@@ -260,9 +227,13 @@ class DeleteMessageView(generics.GenericAPIView):
 
     def get_object(self, message_id: int) -> Message:
         try:
-            message = Message.objects.select_related('sender').get(pk=message_id)
+            message = (
+                Message.objects
+                .select_related('sender', 'sender__profile', 'reply_to', 'reply_to__sender')
+                .prefetch_related('attachments', 'read_receipts')
+                .get(pk=message_id)
+            )
         except Message.DoesNotExist:
-            from rest_framework.exceptions import NotFound
             raise NotFound('Message not found.')
 
         self.check_object_permissions(self.request, message)
@@ -272,31 +243,15 @@ class DeleteMessageView(generics.GenericAPIView):
         message = self.get_object(message_id)
         deleted = services.soft_delete_message(message=message)
         out     = MessageSerializer(deleted, context={'request': request})
-        try:
-            channel_layer = get_channel_layer()
-            if channel_layer is not None:
-                payload = json.dumps({
-                    'type': 'message_deleted',
-                    'message_id': message.id,
-                    'conversation_id': message.conversation_id,
-                    'message': out.data,
-                })
-                async_to_sync(channel_layer.group_send)(
-                    f'chat_{message.conversation_id}',
-                    {'type': 'chat.message', 'payload': payload},
-                )
-                from apps.chats.models import ConversationMember
-                member_ids = list(
-                    ConversationMember.objects.filter(conversation_id=message.conversation_id, is_active=True)
-                    .values_list('user_id', flat=True)
-                )
-                for member_id in member_ids:
-                    async_to_sync(channel_layer.group_send)(
-                        f'user_{member_id}',
-                        {'type': 'chat.message', 'payload': payload},
-                    )
-        except Exception:
-            pass
+        _broadcast_to_conversation_members(
+            message.conversation_id,
+            {
+                'type': 'message_deleted',
+                'message_id': message.id,
+                'conversation_id': message.conversation_id,
+                'message': out.data,
+            },
+        )
         return _ok('Message deleted successfully.', out.data, status.HTTP_200_OK)
 
 
@@ -319,7 +274,6 @@ class RemoveMessageView(generics.GenericAPIView):
         try:
             message = Message.objects.select_related('sender').get(pk=message_id)
         except Message.DoesNotExist:
-            from rest_framework.exceptions import NotFound
             raise NotFound('Message not found.')
 
         self.check_object_permissions(self.request, message)
@@ -331,35 +285,19 @@ class RemoveMessageView(generics.GenericAPIView):
         msg_id = message.id
         services.remove_message(message=message)
 
-        try:
-            channel_layer = get_channel_layer()
-            if channel_layer is not None:
-                payload = json.dumps({
-                    'type': 'message_removed',
-                    'message_id': msg_id,
-                    'conversation_id': conversation_id,
-                })
-                async_to_sync(channel_layer.group_send)(
-                    f'chat_{conversation_id}',
-                    {'type': 'chat.message', 'payload': payload},
-                )
-                from apps.chats.models import ConversationMember
-                member_ids = list(
-                    ConversationMember.objects.filter(conversation_id=conversation_id, is_active=True)
-                    .values_list('user_id', flat=True)
-                )
-                for member_id in member_ids:
-                    async_to_sync(channel_layer.group_send)(
-                        f'user_{member_id}',
-                        {'type': 'chat.message', 'payload': payload},
-                    )
-        except Exception:
-            pass
+        _broadcast_to_conversation_members(
+            conversation_id,
+            {
+                'type': 'message_removed',
+                'message_id': msg_id,
+                'conversation_id': conversation_id,
+            },
+        )
         return _ok('Message removed successfully.', {'message_id': msg_id}, status.HTTP_200_OK)
 
 
 # ---------------------------------------------------------------------------
-# 5. POST /api/messages/upload/  — Upload a file attachment
+# 5. GET /api/messages/<message_id>/reads/  — Message read receipts
 # ---------------------------------------------------------------------------
 
 class ReadStatusView(generics.GenericAPIView):
@@ -385,6 +323,10 @@ class ReadStatusView(generics.GenericAPIView):
         return _ok('Read status fetched successfully.', {'message_id': message_id, 'users': data}, status.HTTP_200_OK)
 
 
+# ---------------------------------------------------------------------------
+# 6. POST /api/messages/upload/  — Upload a file attachment
+# ---------------------------------------------------------------------------
+
 class UploadAttachmentView(generics.GenericAPIView):
     """
     Upload a file and associate it with an existing message.
@@ -392,13 +334,7 @@ class UploadAttachmentView(generics.GenericAPIView):
     Accepts multipart/form-data with:
         - file       : the binary file
         - message_id : the ID of the parent message
-
-    The requesting user must be the sender of that message (prevents
-    attaching files to other people's messages).
-
-    Validation (in services.upload_attachment):
-        - MIME type must be in the ALLOWED_MIME_TYPES whitelist.
-        - File is stored in media/chat/.
+        - upload_id  : optional client UUID for idempotent retries
     """
 
     permission_classes = [IsAuthenticated]
@@ -407,9 +343,6 @@ class UploadAttachmentView(generics.GenericAPIView):
     def post(self, request, *args, **kwargs):
         file       = request.FILES.get('file')
         message_id = request.data.get('message_id')
-        # Client-generated idempotency key.  Present for all compose-bar uploads
-        # (first attempt and every retry use the SAME UUID).  Absent for the
-        # edit-message upload path, which does not need idempotency.
         upload_id  = request.data.get('upload_id') or None
 
         if not file:
@@ -417,10 +350,9 @@ class UploadAttachmentView(generics.GenericAPIView):
         if not message_id:
             return _err('message_id is required.', {}, status.HTTP_400_BAD_REQUEST)
 
-        # Fetch message and confirm ownership
         try:
             message = Message.objects.select_related('sender').get(pk=message_id)
-        except Message.DoesNotExist:
+        except (Message.DoesNotExist, ValueError, TypeError):
             return _err('Message not found.', {}, status.HTTP_404_NOT_FOUND)
 
         if message.sender != request.user:
@@ -436,46 +368,25 @@ class UploadAttachmentView(generics.GenericAPIView):
                 upload_id=upload_id,
             )
         except IntegrityError:
-            # Two concurrent retries with the same upload_id both passed the
-            # initial get() check inside the service and raced to INSERT.  The
-            # losing INSERT raised a unique-constraint IntegrityError.  Fetch
-            # the already-committed row and return it so both callers succeed.
             if upload_id:
                 attachment = Attachment.objects.get(upload_id=upload_id)
             else:
-                raise   # unexpected — re-raise for visibility
+                raise
 
         out = AttachmentSerializer(attachment, context={'request': request})
-        # Broadcast updated message to the conversation room and member channels so all
-        # participants receive the new attachment in real-time.
         try:
-            # Refresh message from DB to ensure all relations and attachments are current
-            message.refresh_from_db()
-            serialized_message = MessageSerializer(message, context={'request': request}).data
-            payload = json.dumps({
-                'type': 'new_message',
-                'message': serialized_message,
-            })
-            channel_layer = get_channel_layer()
-            if channel_layer is not None:
-                # 1. Broadcast to active chat room
-                async_to_sync(channel_layer.group_send)(
-                    f'chat_{message.conversation_id}',
-                    {'type': 'chat.message', 'payload': payload},
-                )
-                # 2. Broadcast to each member's private channel
-                from apps.chats.models import ConversationMember
-                member_ids = list(
-                    ConversationMember.objects.filter(conversation_id=message.conversation_id, is_active=True)
-                    .values_list('user_id', flat=True)
-                )
-                for member_id in member_ids:
-                    async_to_sync(channel_layer.group_send)(
-                        f'user_{member_id}',
-                        {'type': 'chat.message', 'payload': payload},
-                    )
+            hydrated_message = (
+                Message.objects
+                .select_related('sender', 'sender__profile', 'reply_to', 'reply_to__sender')
+                .prefetch_related('attachments', 'read_receipts')
+                .get(pk=message.pk)
+            )
+            serialized_message = MessageSerializer(hydrated_message, context={'request': request}).data
+            _broadcast_to_conversation_members(
+                message.conversation_id,
+                {'type': 'new_message', 'message': serialized_message},
+            )
         except Exception:
-            pass
+            logger.debug('Attachment WebSocket broadcast skipped for message %s', message.pk, exc_info=True)
 
         return _ok('File uploaded successfully.', out.data, status.HTTP_201_CREATED)
-

@@ -7,9 +7,8 @@ import { useConversation } from '../../context/ConversationContext';
 function MainLayout({ children }) {
   const location = useLocation();
   const navigate = useNavigate();
-  const { selectedConversation, setSelectedConversation } = useConversation();
+  const { selectedConversation } = useConversation();
 
-  // Determine active nav tab from route or local state
   const [activeTab, setActiveTab] = useState(() => {
     if (location.pathname === '/settings') return 'settings';
     if (location.pathname === '/profile') return 'profile';
@@ -32,10 +31,6 @@ function MainLayout({ children }) {
         window.dispatchEvent(new CustomEvent('chatapp:open-new-group'));
       }
     }
-  };
-
-  const handleBackMobile = () => {
-    setSelectedConversation(null);
   };
 
   return (

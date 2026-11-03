@@ -8,7 +8,7 @@ Nexus Chat is a full-stack chat prototype demonstrating React, Django REST Frame
 
 - Built a full-stack chat application with React/Vite frontend, Django REST API, and real-time WebSocket messaging via Django Channels.
 - Implemented authentication with JWT, conversation membership controls, message threading, attachments, and read receipts.
-- Prepared deployment-ready infrastructure with Docker Compose, production environment configuration, PostgreSQL support, and Redis channel layer integration.
+- Prepared deployment configuration with Docker Compose, environment-based settings, and PostgreSQL support.
 
 ## ATS-friendly technologies
 
@@ -19,7 +19,6 @@ Nexus Chat is a full-stack chat prototype demonstrating React, Django REST Frame
 - Django REST Framework
 - Django Channels
 - PostgreSQL
-- Redis
 - Docker
 - JWT
 - WebSockets

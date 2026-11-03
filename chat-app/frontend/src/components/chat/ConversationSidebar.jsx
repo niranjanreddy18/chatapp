@@ -1,19 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   SquarePen,
   MoreVertical,
   Search,
-  Users,
   MessageSquare,
-  Sparkles,
   Check,
-  CheckCheck,
   LoaderCircle,
   AlertCircle,
   Plus,
   X,
-  Pin,
   Star,
   UserPlus,
   Settings,
@@ -59,10 +55,8 @@ function ConversationSidebar({ onSelectChatMobile }) {
     setSelectedConversation,
     loading,
     error,
-    refreshConversations,
     createConversation,
     createGroup,
-    deleteConversation,
     presenceMap,
     favoriteIds = [],
     toggleFavorite,
@@ -95,6 +89,26 @@ function ConversationSidebar({ onSelectChatMobile }) {
   const searchInputRef = useRef(null);
   const newChatSearchRef = useRef(null);
 
+  const openNewChatModal = useCallback(() => {
+    setShowNewChat(true);
+    setUserSearch('');
+    setSelectedUserId(null);
+    fetchUsers({ excludeExisting: true });
+    setTimeout(() => newChatSearchRef.current?.focus(), 80);
+  }, [fetchUsers]);
+
+  const closeNewChatModal = useCallback(() => {
+    setShowNewChat(false);
+    setUserSearch('');
+    setSelectedUserId(null);
+    resetUsers();
+  }, [resetUsers]);
+
+  const openNewGroupModal = useCallback(() => {
+    setShowNewGroup(true);
+    fetchUsers({ excludeExisting: false });
+  }, [fetchUsers]);
+
   // Close more menu on outside click
   useEffect(() => {
     if (!moreMenuOpen) return;
@@ -107,13 +121,10 @@ function ConversationSidebar({ onSelectChatMobile }) {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [moreMenuOpen]);
 
-  // Listen for custom event 'chatapp:open-new-chat' from empty states
+  // Listen for custom events from empty states / navigation rail
   useEffect(() => {
     const handleOpenNewChat = () => openNewChatModal();
-    const handleOpenNewGroup = () => {
-      setShowNewGroup(true);
-      fetchUsers();
-    };
+    const handleOpenNewGroup = () => openNewGroupModal();
     window.addEventListener('chatapp:open-new-chat', handleOpenNewChat);
     window.addEventListener('nexus:open-new-chat', handleOpenNewChat);
     window.addEventListener('chatapp:open-new-group', handleOpenNewGroup);
@@ -122,23 +133,7 @@ function ConversationSidebar({ onSelectChatMobile }) {
       window.removeEventListener('nexus:open-new-chat', handleOpenNewChat);
       window.removeEventListener('chatapp:open-new-group', handleOpenNewGroup);
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const openNewChatModal = () => {
-    setShowNewChat(true);
-    setUserSearch('');
-    setSelectedUserId(null);
-    fetchUsers();
-    setTimeout(() => newChatSearchRef.current?.focus(), 80);
-  };
-
-  const closeNewChatModal = () => {
-    setShowNewChat(false);
-    setUserSearch('');
-    setSelectedUserId(null);
-    resetUsers();
-  };
+  }, [openNewChatModal, openNewGroupModal]);
 
   // -------------------------------------------------------------------------
   // Filtered & Derived conversations
@@ -146,7 +141,6 @@ function ConversationSidebar({ onSelectChatMobile }) {
   const filteredConversations = useMemo(() => {
     let result = conversations;
 
-    // Search query filter
     if (search.trim()) {
       const query = search.toLowerCase();
       result = result.filter((conv) => {
@@ -155,7 +149,6 @@ function ConversationSidebar({ onSelectChatMobile }) {
       });
     }
 
-    // Filter pill tabs
     if (activeFilter === 'unread') {
       result = result.filter((conv) => (conv.unread_count ?? 0) > 0);
     } else if (activeFilter === 'groups') {
@@ -182,19 +175,17 @@ function ConversationSidebar({ onSelectChatMobile }) {
     [conversations, favoriteIds]
   );
 
-  // Filtered users for New Chat modal
   const filteredUsers = useMemo(() => {
     if (!userSearch.trim()) return users;
     const query = userSearch.toLowerCase();
     return users.filter((u) => u.username.toLowerCase().includes(query));
   }, [users, userSearch]);
 
-  // Create private conversation
   const handleCreatePrivate = async () => {
     if (!selectedUserId || creating) return;
     setCreating(true);
     try {
-      const created = await createConversation(selectedUserId);
+      await createConversation(selectedUserId);
       closeNewChatModal();
       if (onSelectChatMobile) onSelectChatMobile();
     } catch {
@@ -204,9 +195,8 @@ function ConversationSidebar({ onSelectChatMobile }) {
     }
   };
 
-  // Create group conversation
   const handleCreateGroup = async () => {
-    if (!groupName.trim() || groupMemberIds.length < 1 || creatingGroup) return;
+    if (!groupName.trim() || groupMemberIds.length < 2 || creatingGroup) return;
     setCreatingGroup(true);
     try {
       await createGroup({ name: groupName, memberIds: groupMemberIds });
@@ -260,7 +250,6 @@ function ConversationSidebar({ onSelectChatMobile }) {
         </div>
 
         <div className="flex items-center gap-1">
-          {/* New Chat Button */}
           <button
             id="new-chat-btn"
             onClick={openNewChatModal}
@@ -271,7 +260,6 @@ function ConversationSidebar({ onSelectChatMobile }) {
             <SquarePen size={18} />
           </button>
 
-          {/* More Options Menu */}
           <div className="relative" ref={moreMenuRef}>
             <button
               id="sidebar-more-menu-btn"
@@ -289,8 +277,7 @@ function ConversationSidebar({ onSelectChatMobile }) {
                 <button
                   onClick={() => {
                     setMoreMenuOpen(false);
-                    setShowNewGroup(true);
-                    fetchUsers();
+                    openNewGroupModal();
                   }}
                   className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800 transition"
                 >
@@ -491,12 +478,10 @@ function ConversationSidebar({ onSelectChatMobile }) {
                       : 'hover:bg-white/70 dark:hover:bg-slate-800/60 border border-transparent'
                   }`}
                 >
-                  {/* Left active highlight accent */}
                   {active && (
                     <span className="absolute left-0 top-1/2 h-8 w-1 -translate-y-1/2 rounded-r-full bg-blue-600" />
                   )}
 
-                  {/* Avatar */}
                   <div className="relative shrink-0">
                     <Avatar
                       name={displayName}
@@ -507,9 +492,7 @@ function ConversationSidebar({ onSelectChatMobile }) {
                     />
                   </div>
 
-                  {/* Body */}
                   <div className="min-w-0 flex-1">
-                    {/* Top Row: Name + Time */}
                     <div className="flex items-center justify-between gap-1.5">
                       <p
                         className={`truncate text-sm font-semibold ${
@@ -531,7 +514,6 @@ function ConversationSidebar({ onSelectChatMobile }) {
                       </span>
                     </div>
 
-                    {/* Bottom Row: Last message preview + Unread badge / Icons */}
                     <div className="mt-0.5 flex items-center justify-between gap-2">
                       <p className="truncate text-xs text-slate-500 dark:text-slate-400">
                         {conversation.conversation_type === 'GROUP'
@@ -540,7 +522,6 @@ function ConversationSidebar({ onSelectChatMobile }) {
                       </p>
 
                       <div className="flex items-center gap-1.5 shrink-0">
-                        {/* Star toggle button */}
                         <button
                           type="button"
                           onClick={(e) => {
@@ -558,7 +539,6 @@ function ConversationSidebar({ onSelectChatMobile }) {
                           <Star size={13} className={isFav ? 'fill-amber-400' : ''} />
                         </button>
 
-                        {/* Unread badge */}
                         {(conversation.unread_count ?? 0) > 0 && (
                           <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-blue-600 px-1.5 text-[10px] font-bold text-white shadow-sm">
                             {conversation.unread_count > 99 ? '99+' : conversation.unread_count}
@@ -607,7 +587,10 @@ function ConversationSidebar({ onSelectChatMobile }) {
               <div className="p-6 text-center text-sm text-slate-500">
                 <AlertCircle size={20} className="mx-auto mb-2 text-rose-400" />
                 <p>Failed to load users.</p>
-                <button onClick={fetchUsers} className="mt-2 text-xs font-semibold text-blue-600 hover:underline">
+                <button
+                  onClick={() => fetchUsers({ excludeExisting: true })}
+                  className="mt-2 text-xs font-semibold text-blue-600 hover:underline"
+                >
                   Retry
                 </button>
               </div>
@@ -691,7 +674,7 @@ function ConversationSidebar({ onSelectChatMobile }) {
           <div>
             <div className="flex items-center justify-between mb-1.5">
               <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500">
-                Select Members ({groupMemberIds.length})
+                Select Members ({groupMemberIds.length} selected, min 2)
               </label>
             </div>
             <div className="max-h-56 space-y-1 overflow-y-auto rounded-xl border border-slate-200/80 dark:border-slate-800 p-1.5">
@@ -731,7 +714,7 @@ function ConversationSidebar({ onSelectChatMobile }) {
 
           <Button
             className="w-full bg-blue-600 hover:bg-blue-700"
-            disabled={!groupName.trim() || groupMemberIds.length < 1 || creatingGroup}
+            disabled={!groupName.trim() || groupMemberIds.length < 2 || creatingGroup}
             onClick={handleCreateGroup}
           >
             {creatingGroup ? (

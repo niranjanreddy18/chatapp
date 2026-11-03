@@ -4,11 +4,11 @@ serializers.py — Message Module
 
 Five serializers, each with a single, focused responsibility:
 
-1. AttachmentSerializer       — read-only; nested inside message responses
-2. MessageSerializer          — full read output with flattened sender fields
-3. SendMessageSerializer      — write-only input for POST /api/messages/
-4. UpdateMessageSerializer    — write-only input for PUT /api/messages/<id>/edit/
-5. ConversationMessageSerializer — lightweight list serializer for paginated views
+1. AttachmentSerializer          — read-only; nested inside message responses
+2. MessageSerializer             — full read output with flattened sender fields
+3. SendMessageSerializer         — write-only input for POST /api/messages/
+4. UpdateMessageSerializer       — write-only input for PUT /api/messages/<id>/edit/
+5. ConversationMessageSerializer — list serializer for paginated conversation messages
 """
 
 from rest_framework import serializers
@@ -83,7 +83,7 @@ class MessageSerializer(serializers.ModelSerializer):
     """
 
     sender_id       = serializers.IntegerField(source='sender.id', read_only=True)
-    conversation     = serializers.IntegerField(source='conversation_id', read_only=True)
+    conversation    = serializers.IntegerField(source='conversation_id', read_only=True)
     sender_username = serializers.CharField(source='sender.username', read_only=True)
     sender_avatar   = serializers.SerializerMethodField()
     attachments     = AttachmentSerializer(many=True, read_only=True)
@@ -206,64 +206,14 @@ class UpdateMessageSerializer(serializers.Serializer):
 # 5. ConversationMessageSerializer  (paginated list output)
 # ---------------------------------------------------------------------------
 
-class ConversationMessageSerializer(serializers.ModelSerializer):
+class ConversationMessageSerializer(MessageSerializer):
     """
-    Lightweight serializer used exclusively in the paginated conversation
-    message list (GET /api/messages/<conversation_id>/).
+    Serializer used in the paginated conversation message list
+    (GET /api/messages/<conversation_id>/).
 
-    Identical fields to MessageSerializer but defined separately so it can
-    evolve independently — e.g. a future cursor-pagination variant might
-    strip edited_at to reduce payload size.
+    Subclasses MessageSerializer so field definitions and helper methods are
+    shared while allowing list-specific customization in the future.
     """
 
-    sender_id       = serializers.IntegerField(source='sender.id', read_only=True)
-    conversation     = serializers.IntegerField(source='conversation_id', read_only=True)
-    sender_username = serializers.CharField(source='sender.username', read_only=True)
-    sender_avatar   = serializers.SerializerMethodField()
-    attachments     = AttachmentSerializer(many=True, read_only=True)
-    reply_to        = serializers.SerializerMethodField()
-    read_by         = serializers.SerializerMethodField()
-
-    class Meta:
-        model  = Message
-        fields = (
-            'conversation',
-            'id',
-            'sender_id',
-            'sender_username',
-            'sender_avatar',
-            'content',
-            'message_type',
-            'reply_to',
-            'attachments',
-            'read_by',
-            'is_edited',
-            'edited_at',
-            'is_deleted',
-            'created_at',
-        )
-
-    def get_read_by(self, obj: Message) -> list[int]:
-        return [r.user_id for r in obj.read_receipts.all()]
-
-    def get_sender_avatar(self, obj: Message) -> str | None:
-        request = self.context.get('request')
-        try:
-            avatar = obj.sender.profile.avatar
-            if avatar and request:
-                return request.build_absolute_uri(avatar.url)
-            return avatar.url if avatar else None
-        except Exception:
-            return None
-
-    def get_reply_to(self, obj: Message) -> dict | None:
-        parent = obj.reply_to
-        if parent is None:
-            return None
-        return {
-            'id':              parent.id,
-            'sender_id':       parent.sender_id,
-            'sender_username': parent.sender.username,
-            'content':         parent.content,
-            'is_deleted':      parent.is_deleted,
-        }
+    class Meta(MessageSerializer.Meta):
+        pass

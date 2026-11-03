@@ -59,6 +59,63 @@ class ConversationAPITests(APITestCase):
         self.assertEqual(response.data['data']['conversation_type'], 'GROUP')
         self.assertEqual(response.data['data']['name'], 'Backend Team')
 
+    def test_group_creation_rejects_nonexistent_member_ids(self):
+        self.authenticate(self.user)
+        response = self.client.post(
+            reverse('group_conversation'),
+            {'name': 'Invalid Group', 'member_ids': [self.other_user.id, 999999]},
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(response.data['success'])
+        self.assertIn('member_ids', response.data['errors'])
+
+    def test_delete_conversation_soft_deletes_and_reopening_reactivates_membership(self):
+        self.authenticate(self.user)
+        created = self.client.post(reverse('private_conversation'), {'user_id': self.other_user.id})
+        conv_id = created.data['data']['id']
+
+        # Alice deletes conversation
+        del_res = self.client.delete(reverse('conversation_delete', kwargs={'pk': conv_id}))
+        self.assertEqual(del_res.status_code, status.HTTP_200_OK)
+
+        # Conversation is hidden from Alice's list
+        alice_list = self.client.get(reverse('conversations')).data['data']
+        self.assertNotIn(conv_id, [c['id'] for c in alice_list])
+
+        # Conversation remains visible to Bob
+        self.authenticate(self.other_user)
+        bob_list = self.client.get(reverse('conversations')).data['data']
+        self.assertIn(conv_id, [c['id'] for c in bob_list])
+
+        # Alice starts a private chat with Bob again -> reactivates existing conversation
+        self.authenticate(self.user)
+        reopened = self.client.post(reverse('private_conversation'), {'user_id': self.other_user.id})
+        self.assertEqual(reopened.status_code, status.HTTP_200_OK)
+        self.assertEqual(reopened.data['data']['id'], conv_id)
+
+    def test_clear_chat_marks_messages_cleared_for_conversation(self):
+        from apps.messages.models import Message
+        self.authenticate(self.user)
+        created = self.client.post(reverse('private_conversation'), {'user_id': self.other_user.id})
+        conv_id = created.data['data']['id']
+
+        Message.objects.create(conversation_id=conv_id, sender=self.user, content='Msg 1')
+        Message.objects.create(conversation_id=conv_id, sender=self.other_user, content='Msg 2')
+
+        # Non-member cannot clear chat
+        self.authenticate(self.third_user)
+        forbidden_res = self.client.post(reverse('conversation_clear', kwargs={'pk': conv_id}))
+        self.assertEqual(forbidden_res.status_code, status.HTTP_404_NOT_FOUND)
+
+        # Member clears chat
+        self.authenticate(self.user)
+        clear_res = self.client.post(reverse('conversation_clear', kwargs={'pk': conv_id}))
+        self.assertEqual(clear_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(clear_res.data['data']['cleared_count'], 2)
+
+        msg_list = self.client.get(reverse('message_list', kwargs={'conversation_id': conv_id}))
+        self.assertEqual(msg_list.data['data']['results'], [])
+
     def test_conversation_list_is_scoped_to_member(self):
         self.authenticate(self.user)
         self.client.post(reverse('private_conversation'), {'user_id': self.other_user.id})
@@ -219,8 +276,6 @@ class ChatConsumerTests(TestCase):
 
     def test_message_and_typing_events_reach_another_member(self):
         async def receive_event(communicator, expected_type):
-            # Connections emit presence updates first; consume those until the
-            # event under test arrives.
             for _ in range(6):
                 payload = json.loads(await communicator.receive_from())
                 if payload['type'] == expected_type:

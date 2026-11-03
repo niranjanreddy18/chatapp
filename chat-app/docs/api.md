@@ -5,16 +5,17 @@
 - Local development: `http://localhost:8000/api`
 - Production: configured through `VITE_API_BASE_URL`.
 
-## Authentication
+## Authentication & Response Envelope
 
-Most endpoints require a Bearer JWT token in the `Authorization` header:
+Protected endpoints require a Bearer JWT token in the `Authorization` header:
 
 ```http
 Authorization: Bearer <access_token>
 ```
 
-Successful responses follow this structure:
+All API responses use a consistent JSON envelope.
 
+**Success response:**
 ```json
 {
   "success": true,
@@ -23,8 +24,7 @@ Successful responses follow this structure:
 }
 ```
 
-Error responses follow this structure:
-
+**Error response:**
 ```json
 {
   "success": false,
@@ -33,185 +33,189 @@ Error responses follow this structure:
 }
 ```
 
+---
+
 ## Endpoints
 
-### 1. Register
+### Authentication (`/api/auth/`)
 
-- Method: `POST`
-- URL: `/api/auth/register/`
-- Authentication: None
-- Request body:
-  - `username` (string)
-  - `email` (string)
-  - `password` (string)
-  - `confirm_password` (string)
-- Success response:
-  - `user`: registered user data
+#### 1. Register
+- **Method:** `POST`
+- **URL:** `/api/auth/register/`
+- **Authentication:** None
+- **Request body:**
+  - `username` (string, required)
+  - `email` (string, required)
+  - `password` (string, required)
+  - `confirm_password` (string, required)
+- **Success response (`201 Created`):**
+  - `user`: registered user object
 
-### 2. Login
-
-- Method: `POST`
-- URL: `/api/auth/login/`
-- Authentication: None
-- Request body:
-  - `username_or_email` (string)
-  - `password` (string)
-- Success response:
+#### 2. Login
+- **Method:** `POST`
+- **URL:** `/api/auth/login/`
+- **Authentication:** None
+- **Request body:**
+  - `username_or_email` (string, required)
+  - `password` (string, required)
+- **Success response (`200 OK`):**
   - `access`: JWT access token
   - `refresh`: JWT refresh token
-  - `user`: user details
+  - `user`: authenticated user details (including profile fields)
 
-### 3. Logout
+#### 3. Logout
+- **Method:** `POST`
+- **URL:** `/api/auth/logout/`
+- **Authentication:** Bearer JWT
+- **Request body:**
+  - `refresh` (string, required) — refresh token to blacklist
+- **Success response (`200 OK`):** confirmation message
 
-- Method: `POST`
-- URL: `/api/auth/logout/`
-- Authentication: Bearer JWT
-- Request body:
-  - `refresh` (string)
-- Success response: confirmation message
+#### 4. Refresh Token
+- **Method:** `POST`
+- **URL:** `/api/auth/refresh/`
+- **Authentication:** None
+- **Request body:**
+  - `refresh` (string, required)
+- **Success response (`200 OK`):**
+  - `access`: new JWT access token
+  - `refresh`: rotated JWT refresh token (when rotation is enabled)
 
-### 4. Refresh token
+#### 5. Current User
+- **Method:** `GET`
+- **URL:** `/api/auth/me/`
+- **Authentication:** Bearer JWT
+- **Success response (`200 OK`):** current user details (`id`, `username`, `email`, `avatar`, `bio`, `status_message`, `is_online`, `last_seen`, `date_joined`)
 
-- Method: `POST`
-- URL: `/api/auth/refresh/`
-- Authentication: None
-- Request body:
-  - `refresh` (string)
-- Success response:
-  - `access`: new access token
+---
 
-### 5. Current user
+### Users & Profile (`/api/profile/`, `/api/users/`)
 
-- Method: `GET`
-- URL: `/api/auth/me/`
-- Authentication: Bearer JWT
-- Response data: current user details
+#### 6. Get / Update User Profile
+- **Method:** `GET` | `PUT`
+- **URL:** `/api/profile/`
+- **Authentication:** Bearer JWT
+- **Request body (`PUT`, `multipart/form-data` or `application/json`):**
+  - `username` (string, optional, max 150 chars)
+  - `avatar` (image file up to 5 MB, or `""` to clear avatar)
+  - `bio` (string, optional, max 300 chars)
+  - `status_message` (string, optional, max 100 chars)
+- **Success response (`200 OK`):** updated profile object
 
-### 6. User profile
+#### 7. User Directory
+- **Method:** `GET`
+- **URL:** `/api/users/`
+- **Authentication:** Bearer JWT
+- **Query parameters:**
+  - `search` (string, optional) — case-insensitive username filter
+  - `exclude_existing` (`true` | `false`, optional) — when `true`, excludes users who already share an active private conversation with the requester
+- **Success response (`200 OK`):** list of users
 
-- Method: `GET`
-- URL: `/api/profile/`
-- Authentication: Bearer JWT
-- Response data: profile fields
+---
 
-- Method: `PUT`
-- URL: `/api/profile/`
-- Authentication: Bearer JWT
-- Request body (partial update):
-  - `avatar` (file)
-  - `bio` (string)
-  - `status_message` (string)
+### Conversations (`/api/conversations/`)
 
-### 7. User list
+#### 8. List Conversations
+- **Method:** `GET`
+- **URL:** `/api/conversations/`
+- **Authentication:** Bearer JWT
+- **Success response (`200 OK`):** list of active conversations for the current user, ordered by `updated_at` descending, including `member_count`, `unread_count`, and `members`
 
-- Method: `GET`
-- URL: `/api/users/`
-- Authentication: Bearer JWT
-- Query params:
-  - `search` (optional)
-- Response data: list of users excluding current user
+#### 9. Create or Get Private Conversation
+- **Method:** `POST`
+- **URL:** `/api/conversations/private/`
+- **Authentication:** Bearer JWT
+- **Request body:**
+  - `user_id` (integer, required)
+- **Success response (`201 Created` or `200 OK`):** private conversation object (reactivates membership if previously soft-deleted)
 
-### 8. Create private conversation
+#### 10. Create Group Conversation
+- **Method:** `POST`
+- **URL:** `/api/conversations/group/`
+- **Authentication:** Bearer JWT
+- **Request body:**
+  - `name` (string, required)
+  - `member_ids` (array of integers, required, at least 2 distinct members)
+- **Success response (`201 Created`):** group conversation object
 
-- Method: `POST`
-- URL: `/api/conversations/private/`
-- Authentication: Bearer JWT
-- Request body:
-  - `user_id` (integer)
-- Success response: conversation object
+#### 11. Conversation Detail
+- **Method:** `GET`
+- **URL:** `/api/conversations/<id>/`
+- **Authentication:** Bearer JWT (must be an active member)
+- **Success response (`200 OK`):** conversation details with memberships
 
-### 9. Create group conversation
+#### 12. Mark Conversation as Read
+- **Method:** `POST`
+- **URL:** `/api/conversations/<id>/read/`
+- **Authentication:** Bearer JWT (must be an active member)
+- **Success response (`200 OK`):** `{ "conversation_id": <id>, "read_message_ids": [...] }`
 
-- Method: `POST`
-- URL: `/api/conversations/group/`
-- Authentication: Bearer JWT
-- Request body:
-  - `name` (string)
-  - `member_ids` (list of integers)
-- Success response: conversation object
+#### 13. Delete Conversation (Soft Delete Membership)
+- **Method:** `DELETE`
+- **URL:** `/api/conversations/<id>/delete/`
+- **Authentication:** Bearer JWT (must be an active member)
+- **Success response (`200 OK`):** deactivates the requesting user's membership while preserving the conversation for other participants
 
-### 10. Conversation list
+#### 14. Clear Conversation Messages
+- **Method:** `POST`
+- **URL:** `/api/conversations/<id>/clear/`
+- **Authentication:** Bearer JWT (must be an active member)
+- **Success response (`200 OK`):** `{ "cleared_count": <int> }`
 
-- Method: `GET`
-- URL: `/api/conversations/`
-- Authentication: Bearer JWT
-- Response data: conversation summaries with member counts
+---
 
-### 11. Conversation detail
+### Messages (`/api/messages/`)
 
-- Method: `GET`
-- URL: `/api/conversations/<id>/`
-- Authentication: Bearer JWT
-- Response data: conversation details with memberships
-
-### 12. Send message
-
-- Method: `POST`
-- URL: `/api/messages/`
-- Authentication: Bearer JWT
-- Request body:
-  - `conversation_id` (integer)
-  - `content` (string)
+#### 15. Send Message
+- **Method:** `POST`
+- **URL:** `/api/messages/`
+- **Authentication:** Bearer JWT (must be an active conversation member)
+- **Request body:**
+  - `conversation_id` (integer, required)
+  - `content` (string, required, 1–5000 chars)
   - `reply_to` (integer, optional)
-  - `message_type` (string, optional)
-- Success response: serialized message
+  - `message_type` (`text` | `image` | `file` | `system`, optional, default `text`)
+- **Success response (`201 Created`):** serialized message object
 
-### 13. List messages
+#### 16. List Conversation Messages (Paginated)
+- **Method:** `GET`
+- **URL:** `/api/messages/<conversation_id>/?page=<n>`
+- **Authentication:** Bearer JWT (must be an active conversation member)
+- **Success response (`200 OK`):** paginated message list (`count`, `next`, `previous`, `results`) ordered oldest first (20 per page)
 
-- Method: `GET`
-- URL: `/api/messages/<conversation_id>/`
-- Authentication: Bearer JWT
-- Response: paginated messages oldest first
+#### 17. Edit Message
+- **Method:** `PUT`
+- **URL:** `/api/messages/<message_id>/edit/`
+- **Authentication:** Bearer JWT (must be original sender)
+- **Request body:**
+  - `content` (string, required, 1–5000 chars)
+- **Success response (`200 OK`):** updated message object (`is_edited: true`)
 
-### 14. Edit message
+#### 18. Soft-Delete Message
+- **Method:** `DELETE`
+- **URL:** `/api/messages/<message_id>/delete/`
+- **Authentication:** Bearer JWT (must be original sender)
+- **Success response (`200 OK`):** soft-deleted message (`is_deleted: true`, `content: "This message was deleted."`)
 
-- Method: `PUT`
-- URL: `/api/messages/<message_id>/edit/`
-- Authentication: Bearer JWT
-- Request body:
-  - `content` (string)
-- Success response: updated message
+#### 19. Permanently Remove Message
+- **Method:** `DELETE`
+- **URL:** `/api/messages/<message_id>/remove/`
+- **Authentication:** Bearer JWT (must be original sender)
+- **Success response (`200 OK`):** `{ "message_id": <id> }`
 
-### 15. Delete message
+#### 20. Message Read Receipts
+- **Method:** `GET`
+- **URL:** `/api/messages/<message_id>/reads/`
+- **Authentication:** Bearer JWT (must be an active conversation member)
+- **Success response (`200 OK`):** `{ "message_id": <id>, "users": [{ "user_id": ..., "username": ..., "read_at": ... }] }`
 
-- Method: `DELETE`
-- URL: `/api/messages/<message_id>/delete/`
-- Authentication: Bearer JWT
-- Success response: soft-deleted message
-
-### 16. Read status
-
-- Method: `GET`
-- URL: `/api/messages/<message_id>/read-status/`
-- Authentication: Bearer JWT
-- Response data: list of users who have read the message
-
-### 17. Upload attachment
-
-- Method: `POST`
-- URL: `/api/messages/upload/`
-- Authentication: Bearer JWT
-- Content type: `multipart/form-data`
-- Request fields:
-  - `file`
-  - `message_id` (integer)
-- Success response: attachment object
-
-## Error handling
-
-Typical error responses include:
-
-- `400 Bad Request` for validation failures.
-- `401 Unauthorized` for missing or invalid JWTs.
-- `403 Forbidden` for permission violations.
-- `404 Not Found` for missing resources.
-
-Example payload:
-
-```json
-{
-  "success": false,
-  "message": "Invalid credentials",
-  "errors": {}
-}
-```
+#### 21. Upload Attachment
+- **Method:** `POST`
+- **URL:** `/api/messages/upload/`
+- **Authentication:** Bearer JWT (must be original sender of `message_id`)
+- **Content type:** `multipart/form-data`
+- **Request fields:**
+  - `file` (binary file, required, max 25 MB, must match allowed MIME types)
+  - `message_id` (integer, required)
+  - `upload_id` (UUID string, optional — client idempotency key for safe retries)
+- **Success response (`201 Created`):** serialized attachment object

@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import api from '../services/api';
 import { connect as connectSocket, disconnect as disconnectSocket, registerListener, removeListener } from '../services/websocket';
@@ -21,7 +21,7 @@ export function ConversationProvider({ children }) {
     }
   });
 
-  const toggleFavorite = (conversationId) => {
+  const toggleFavorite = useCallback((conversationId) => {
     if (!conversationId) return;
     setFavoriteIds((prev) => {
       const exists = prev.includes(conversationId);
@@ -30,7 +30,9 @@ export function ConversationProvider({ children }) {
         : [...prev, conversationId];
       try {
         localStorage.setItem('chatapp_favorites', JSON.stringify(next));
-      } catch {}
+      } catch {
+        // Ignore storage write errors
+      }
       if (exists) {
         toast.success('Removed from starred');
       } else {
@@ -38,16 +40,19 @@ export function ConversationProvider({ children }) {
       }
       return next;
     });
-  };
+  }, []);
 
-  const isFavorite = (conversationId) => {
+  const isFavorite = useCallback((conversationId) => {
     return Boolean(conversationId && favoriteIds.includes(conversationId));
-  };
+  }, [favoriteIds]);
 
   const userRef = useRef(user);
   userRef.current = user;
 
-  const loadConversations = async () => {
+  const selectedConversationRef = useRef(null);
+  selectedConversationRef.current = selectedConversation;
+
+  const loadConversations = useCallback(async () => {
     if (!isAuthenticated || !token) {
       setLoading(false);
       return;
@@ -59,22 +64,19 @@ export function ConversationProvider({ children }) {
       const response = await api.get('/conversations/');
       const items = response?.data?.data || [];
       setConversations(items);
-      if (!selectedConversation && items.length) {
-        setSelectedConversation(items[0]);
-      }
-    } catch (err) {
+      setSelectedConversation((current) => current || (items.length ? items[0] : null));
+    } catch {
       setError('Unable to load conversations right now.');
       toast.error('Failed to load conversations.');
     } finally {
       setLoading(false);
     }
-  };
+  }, [isAuthenticated, token]);
 
-  const refreshConversations = () => loadConversations();
+  const refreshConversations = useCallback(() => loadConversations(), [loadConversations]);
 
-  const markConversationAsRead = async (conversationId) => {
+  const markConversationAsRead = useCallback(async (conversationId) => {
     if (!conversationId) return;
-    // Optimistic reset in local state
     setConversations((current) =>
       current.map((conv) =>
         conv.id === conversationId
@@ -83,21 +85,19 @@ export function ConversationProvider({ children }) {
       ),
     );
 
-    // Persist read status in backend database
     try {
       await api.post(`/conversations/${conversationId}/read/`);
     } catch {
       // Non-blocking
     }
-  };
+  }, []);
 
-  const createConversation = async (userId) => {
+  const createConversation = useCallback(async (userId) => {
     try {
       const response = await api.post('/conversations/private/', { user_id: userId });
       const created = response?.data?.data;
       if (created) {
-        const nextConversations = [created, ...conversations.filter((item) => item.id !== created.id)];
-        setConversations(nextConversations);
+        setConversations((current) => [created, ...current.filter((item) => item.id !== created.id)]);
         setSelectedConversation(created);
         toast.success('Conversation created.');
       }
@@ -107,15 +107,14 @@ export function ConversationProvider({ children }) {
       toast.error(message);
       throw err;
     }
-  };
+  }, []);
 
-  const createGroup = async ({ name, memberIds }) => {
+  const createGroup = useCallback(async ({ name, memberIds }) => {
     try {
       const response = await api.post('/conversations/group/', { name, member_ids: memberIds });
       const created = response?.data?.data;
       if (created) {
-        const nextConversations = [created, ...conversations.filter((item) => item.id !== created.id)];
-        setConversations(nextConversations);
+        setConversations((current) => [created, ...current.filter((item) => item.id !== created.id)]);
         setSelectedConversation(created);
         toast.success('Group created.');
       }
@@ -125,15 +124,11 @@ export function ConversationProvider({ children }) {
       toast.error(message);
       throw err;
     }
-  };
+  }, []);
 
-  // ---------------------------------------------------------------------------
-  // Delete conversation — soft-removes the user's own membership.
-  // ---------------------------------------------------------------------------
-  const deleteConversation = async (conversationId) => {
+  const deleteConversation = useCallback(async (conversationId) => {
     try {
       await api.delete(`/conversations/${conversationId}/delete/`);
-      // Immediately remove from local state
       setConversations((current) => current.filter((item) => item.id !== conversationId));
       setSelectedConversation((current) => (current?.id === conversationId ? null : current));
       toast.success('Conversation removed.');
@@ -142,7 +137,7 @@ export function ConversationProvider({ children }) {
       toast.error(message);
       throw err;
     }
-  };
+  }, []);
 
   useEffect(() => {
     if (!isAuthenticated || !token) {
@@ -155,7 +150,7 @@ export function ConversationProvider({ children }) {
     }
 
     loadConversations();
-  }, [isAuthenticated, token]);
+  }, [isAuthenticated, token, loadConversations]);
 
   // Presence updates (user_status events)
   useEffect(() => {
@@ -257,12 +252,7 @@ export function ConversationProvider({ children }) {
     return () => removeListener('message', handleUserUpdated);
   }, []);
 
-  // ---------------------------------------------------------------------------
-  // Real-time unread_count sync.
-  // ---------------------------------------------------------------------------
-  const selectedConversationRef = useRef(null);
-  selectedConversationRef.current = selectedConversation;
-
+  // Real-time unread_count sync
   useEffect(() => {
     const handleNewMessageUnread = (payload) => {
       if (payload?.type !== 'new_message' || !payload.message) return;
@@ -271,10 +261,7 @@ export function ConversationProvider({ children }) {
       const currentUserId = Number(userRef.current?.id ?? null);
       const senderId = Number(payload.message.sender_id);
 
-      // Do not increment unread for messages sent by the current user
       if (Number.isFinite(currentUserId) && senderId === currentUserId) return;
-
-      // Only update conversations OTHER than the one currently open.
       if (incomingConversationId === activeConversationId) return;
 
       setConversations((current) => {
@@ -297,14 +284,15 @@ export function ConversationProvider({ children }) {
 
     registerListener('message', handleNewMessageUnread);
     return () => removeListener('message', handleNewMessageUnread);
-  }, []);
+  }, [loadConversations]);
 
-  // ---------------------------------------------------------------------------
-  // conversation_deleted — another member deleted the conversation
-  // ---------------------------------------------------------------------------
+  // conversation_deleted — remove conversation only when deleted by the current user
   useEffect(() => {
     const handleConversationDeleted = (payload) => {
       if (payload?.type !== 'conversation_deleted' || !payload.conversation_id) return;
+      if (payload.deleted_by !== undefined && Number(payload.deleted_by) !== Number(userRef.current?.id)) {
+        return;
+      }
       const deletedId = Number(payload.conversation_id);
       setConversations((current) => current.filter((item) => item.id !== deletedId));
       setSelectedConversation((current) => (current?.id === deletedId ? null : current));
@@ -314,14 +302,11 @@ export function ConversationProvider({ children }) {
     return () => removeListener('message', handleConversationDeleted);
   }, []);
 
-  // ---------------------------------------------------------------------------
-  // When the user selects/opens a conversation, mark it as read both
-  // optimistically in state and persistently on the backend database.
-  // ---------------------------------------------------------------------------
+  // Mark conversation as read when selected
   useEffect(() => {
     if (!selectedConversation?.id) return;
     markConversationAsRead(selectedConversation.id);
-  }, [selectedConversation?.id]);
+  }, [selectedConversation?.id, markConversationAsRead]);
 
   // Connect/disconnect WebSocket when the selected conversation changes
   useEffect(() => {
@@ -349,7 +334,21 @@ export function ConversationProvider({ children }) {
     favoriteIds,
     toggleFavorite,
     isFavorite,
-  }), [conversations, selectedConversation, loading, error, presenceMap, favoriteIds]);
+  }), [
+    conversations,
+    selectedConversation,
+    loading,
+    error,
+    refreshConversations,
+    markConversationAsRead,
+    createConversation,
+    createGroup,
+    deleteConversation,
+    presenceMap,
+    favoriteIds,
+    toggleFavorite,
+    isFavorite,
+  ]);
 
   return <ConversationContext.Provider value={value}>{children}</ConversationContext.Provider>;
 }

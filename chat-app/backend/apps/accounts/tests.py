@@ -1,6 +1,7 @@
 from django.contrib.auth import get_user_model
 from django.urls import reverse
 from rest_framework.test import APITestCase
+from rest_framework_simplejwt.tokens import RefreshToken
 
 
 User = get_user_model()
@@ -57,3 +58,60 @@ class AuthAPITests(APITestCase):
             'password': 'Correct-Horse-9', 'confirm_password': 'not-the-same',
         }, format='json')
         self.assertEqual(response.status_code, 400)
+
+    def test_case_insensitive_username_and_email_uniqueness(self):
+        User.objects.create_user(
+            username='UniqueUser',
+            email='unique@example.com',
+            password='A7!giraffe-breeze',
+        )
+        res_username = self.client.post(reverse('accounts:register'), {
+            'username': 'uniqueuser',
+            'email': 'other@example.com',
+            'password': 'A7!giraffe-breeze',
+            'confirm_password': 'A7!giraffe-breeze',
+        }, format='json')
+        self.assertEqual(res_username.status_code, 400)
+        self.assertIn('username', res_username.data['errors'])
+
+        res_email = self.client.post(reverse('accounts:register'), {
+            'username': 'anotheruser',
+            'email': 'UNIQUE@EXAMPLE.COM',
+            'password': 'A7!giraffe-breeze',
+            'confirm_password': 'A7!giraffe-breeze',
+        }, format='json')
+        self.assertEqual(res_email.status_code, 400)
+        self.assertIn('email', res_email.data['errors'])
+
+    def test_logout_blacklists_refresh_token(self):
+        user = User.objects.create_user(
+            username='logoutuser',
+            email='logout@example.com',
+            password='A7!giraffe-breeze',
+        )
+        refresh = RefreshToken.for_user(user)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {refresh.access_token}')
+
+        response = self.client.post(
+            reverse('accounts:logout'),
+            {'refresh': str(refresh)},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data['success'])
+
+        # Using the same refresh token again must fail with 400
+        second_response = self.client.post(
+            reverse('accounts:logout'),
+            {'refresh': str(refresh)},
+            format='json',
+        )
+        self.assertEqual(second_response.status_code, 400)
+        self.assertFalse(second_response.data['success'])
+
+    def test_unauthenticated_me_returns_standard_error_envelope(self):
+        response = self.client.get(reverse('accounts:me'))
+        self.assertEqual(response.status_code, 401)
+        self.assertFalse(response.data['success'])
+        self.assertIn('message', response.data)
+        self.assertIn('errors', response.data)

@@ -1,121 +1,81 @@
 # Nexus Chat WebSocket Documentation
 
-## Connection flow
+## Connection Flow
 
 1. Frontend connects to the backend WebSocket endpoint:
-   - `ws://<host>/ws/chat/<conversation_id>/?token=<jwt>`
+   - `ws://<host>/ws/chat/<conversation_id>/?token=<access_jwt>`
 2. Backend extracts the `token` query parameter.
 3. JWT authentication is performed using `rest_framework_simplejwt`.
-4. If authentication passes and the user is an active conversation member, the socket is accepted.
-5. The connection joins the conversation group.
+4. If authentication succeeds and the user is an active member of `<conversation_id>`, the connection is accepted.
+5. The consumer subscribes the socket to two channel groups:
+   - `chat_<conversation_id>` — room-scoped events (typing, read receipts, chat cleared)
+   - `user_<user_id>` — user-scoped events (new/edited/deleted/removed messages, new conversations, profile updates)
 
-## Authentication
+## Authentication & Close Codes
 
-- The WebSocket transport authenticates via JWT in the query string.
-- The token must be valid and unexpired.
-- Unauthorized connections close with a WebSocket error code.
+- **`4001`**: Missing, expired, or invalid JWT access token.
+- **`4002`**: Non-text (binary) WebSocket frame received.
+- **`4003`**: Authenticated user is not an active member of the requested conversation.
 
-## Supported events
+## Supported Events
 
-### Frontend-to-server events
+### Client-to-Server Events
 
-- `send_message`
-  - payload:
-    ```json
-    {
-      "type": "send_message",
-      "conversation_id": 123,
-      "content": "Hello",
-      "reply_to": null
-    }
-    ```
+- **`send_message`**
+  ```json
+  {
+    "type": "send_message",
+    "conversation_id": 123,
+    "content": "Hello",
+    "reply_to": null
+  }
+  ```
+- **`typing_start`**: `{ "type": "typing_start", "conversation_id": 123 }`
+- **`typing_stop`**: `{ "type": "typing_stop", "conversation_id": 123 }`
+- **`read_message`**: `{ "type": "read_message", "conversation_id": 123, "message_id": 456 }`
+- **`read_conversation`**: `{ "type": "read_conversation", "conversation_id": 123 }`
 
-- `typing_start`
-  - payload: `{ "type": "typing_start" }`
+### Server-to-Client Events
 
-- `typing_stop`
-  - payload: `{ "type": "typing_stop" }`
+- **`new_message`**: `{ "type": "new_message", "message": { ... } }`
+- **`message_edited`**: `{ "type": "message_edited", "message_id": 123, "conversation_id": 45, "message": { ... } }`
+- **`message_deleted`**: `{ "type": "message_deleted", "message_id": 123, "conversation_id": 45, "message": { ... } }`
+- **`message_removed`**: `{ "type": "message_removed", "message_id": 123, "conversation_id": 45 }`
+- **`typing_start`**: `{ "type": "typing_start", "conversation_id": 45, "user_id": 5, "username": "alice" }`
+- **`typing_stop`**: `{ "type": "typing_stop", "conversation_id": 45, "user_id": 5, "username": "alice" }`
+- **`message_read`**: `{ "type": "message_read", "message_id": 123, "user_id": 5, "username": "alice", "read_at": "..." }`
+- **`user_status`**: `{ "type": "user_status", "user_id": 5, "username": "alice", "is_online": true, "last_seen": "..." }`
+- **`user_updated`**: `{ "type": "user_updated", "user_id": 5, "username": "alice", "avatar": "...", "bio": "...", "status_message": "..." }`
+- **`conversation_created`**: `{ "type": "conversation_created", "conversation": { ... } }`
+- **`conversation_deleted`**: `{ "type": "conversation_deleted", "conversation_id": 45, "deleted_by": 5 }`
+- **`chat_cleared`**: `{ "type": "chat_cleared", "conversation_id": 45, "cleared_by": 5 }`
+- **`error`**: `{ "type": "error", "message": "...", "errors": { ... } }`
 
-- `read_message`
-  - payload:
-    ```json
-    {
-      "type": "read_message",
-      "message_id": 456
-    }
-    ```
-
-### Server-to-client events
-
-- `new_message`
-  - payload includes serialized `message` data.
-
-- `typing_start`
-  - payload includes `user_id` and `username`.
-
-- `typing_stop`
-  - payload includes `user_id`.
-
-- `message_read`
-  - payload includes `message_id`, `user_id`, and `read_at`.
-
-- `user_status`
-  - payload includes `user_id`, `is_online`, and `last_seen`.
-
-- `error`
-  - payload includes `message` describing the failure.
-
-## Message format
-
-All WebSocket messages are JSON objects with a `type` field.
-
-Example server event:
+## Example `new_message` Event
 
 ```json
 {
   "type": "new_message",
   "message": {
+    "conversation": 45,
     "id": 123,
     "sender_id": 5,
     "sender_username": "alice",
+    "sender_avatar": null,
     "content": "Hello",
-    "message_type": "TEXT",
+    "message_type": "text",
     "reply_to": null,
     "attachments": [],
+    "read_by": [],
     "is_edited": false,
+    "edited_at": null,
     "is_deleted": false,
     "created_at": "2026-08-02T12:34:56Z"
   }
 }
 ```
 
-## Typing
+## Reconnection Strategy
 
-- `typing_start` indicates the current user has begun typing.
-- `typing_stop` indicates the current user has stopped typing.
-- All members in the conversation receive these events.
-
-## Presence
-
-- Presence updates are emitted when a user connects or disconnects.
-- The event type is `user_status`.
-- Clients can render online/offline status and last seen metadata.
-
-## Read receipts
-
-- Clients send `read_message` when a message is seen.
-- The server marks the message read in the database.
-- A `message_read` event is broadcast to the conversation group.
-
-## Reconnect strategy
-
-- The frontend reconnects with exponential backoff when the socket closes unexpectedly.
-- It preserves the active conversation ID and JWT token.
-- Reconnection retries are capped to prevent infinite loops.
-
-## Failure cases
-
-- Missing token: connection closes with a client-side error.
-- Invalid token: connection closes with authentication error code.
-- Non-member user: connection closes with forbidden error.
-- Malformed payload: server replies with an `error` event.
+- `frontend/src/services/websocket.js` reconnects automatically using exponential backoff (`1s`, `2s`, `4s`, `8s`, capped at 5 attempts) when a socket closes unexpectedly.
+- Intentional disconnects (switching conversations or logging out) suppress auto-reconnect.

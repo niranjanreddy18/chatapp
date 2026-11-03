@@ -8,7 +8,7 @@ Nexus Chat is a full-stack portfolio prototype built with a React + Vite fronten
 - Backend: Django, Django REST Framework, Django Channels.
 - Database: PostgreSQL.
 - Real-time messaging: WebSockets via Django Channels.
-- Caching / realtime coordination: Redis.
+- Channel layer: Django Channels in-memory layer.
 - Deployment targets: Vercel for frontend, Render for backend.
 
 ## Architecture goals
@@ -96,8 +96,9 @@ The backend is organized by Django apps:
 ## Deployment architecture
 
 - Frontend builds a static site and deploys to Vercel.
-- Backend runs on Render behind a managed PostgreSQL and Redis Cloud.
+- Backend runs on Render with a managed PostgreSQL database.
 - Backend serves API and WebSocket traffic through `config.asgi:application`.
+- The in-memory channel layer supports a single backend process; events are not shared across multiple processes.
 - Static assets are served through `whitenoise` in backend production.
 
 ## ASCII diagrams
@@ -106,7 +107,7 @@ Frontend <--> REST API <--> Backend
                  |
                  | WebSockets
                  v
-                 Redis
+         In-memory channel layer
 
 User Browser
   ├─ React UI
@@ -117,4 +118,3 @@ Backend Services
   ├─ Django REST Framework
   ├─ Django Channels
   ├─ PostgreSQL
-  └─ Redis

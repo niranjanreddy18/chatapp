@@ -1,196 +1,147 @@
 # Nexus Chat
 
-Nexus Chat is a full-stack real-time messaging application built with a React + Vite frontend and a Django backend. The project focuses on secure authentication, private and group conversations, message lifecycle management, and live updates through WebSockets.
+Nexus Chat is a full-stack real-time messaging application built with a **React 19 + Vite** frontend and a **Django 5 + Django REST Framework + Django Channels** backend. It supports 1-on-1 and group conversations, live messaging, typing indicators, read receipts, online presence, and multimedia attachments.
 
-The application is organized as a monorepo with a separate frontend and backend, each designed to be deployed independently while sharing the same domain model and API contract.
+---
 
-## Overview
+## Features
 
-This project includes:
+- **Authentication & Session Management**: User registration, case-insensitive username/email login, JWT access/refresh token rotation, and server-side refresh token blacklisting on logout.
+- **1-on-1 & Group Conversations**: Direct messaging with automatic conversation reuse/reactivation and multi-member group chats.
+- **Real-Time Messaging & Presence**: Instant message delivery, live typing indicators, online/last-seen presence, and per-message read receipts via WebSockets.
+- **Full Message Lifecycle**: Reply-to message threading, message editing (`is_edited` tracking), soft deletion (masking content while preserving thread history), permanent removal, and per-conversation chat clearing.
+- **Media & Voice Attachments**: Image, video, document, and in-browser voice recording uploads backed by Cloudinary storage with client-side optimistic previews and idempotent retry keys (`upload_id`).
+- **User Profiles & Customization**: Customizable avatar, display username, bio, status message, starred conversations, and light/dark/system themes.
 
-- User registration, login, logout, and JWT-based authentication
-- Profile management with avatar, bio, and status information
-- User listing and search
-- Private and group conversation creation
-- Real-time chat using Django Channels
-- Message send, edit, delete, reply, and read-receipt tracking
-- File attachment uploads with Cloudinary storage
-- Conversation deletion and full chat clearing
-- Responsive user interface for chat, profile, and settings pages
+---
 
 ## Tech Stack
 
-### Frontend
-- React 19
-- Vite
-- React Router
-- Axios for REST requests
-- TanStack React Query
-- Tailwind-style component UI
-- WebSocket client for live updates
+| Layer | Technologies |
+| --- | --- |
+| **Frontend** | React 19, Vite 8, React Router v7, Axios, Tailwind CSS v4, Lucide React, `react-hot-toast` |
+| **Backend** | Python 3.12, Django 5.2, Django REST Framework, SimpleJWT, Django Channels, Daphne ASGI |
+| **Database & Storage** | PostgreSQL (production) / SQLite (local dev), Cloudinary (`django-cloudinary-storage`), WhiteNoise |
 
-### Backend
-- Django 5
-- Django REST Framework
-- Django Channels
-- JWT authentication via Simple JWT
-- PostgreSQL-ready configuration
-- Cloudinary media storage
-- Whitenoise for static files
+---
 
-## Project Structure
+## Architecture
+
+The repository is structured as a clean monorepo separating the REST/ASGI backend from the SPA frontend:
 
 ```text
 chat-app/
 ├── backend/
 │   ├── apps/
-│   │   ├── accounts/
-│   │   ├── chats/
-│   │   ├── messages/
-│   │   ├── notifications/
-│   │   ├── users/
-│   │   └── common/
-│   ├── config/
-│   ├── manage.py
-│   ├── requirements.txt
-│   └── Dockerfile
+│   │   ├── accounts/       # Registration, login, logout, JWT refresh, /auth/me
+│   │   ├── chats/          # Conversations, memberships, ASGI WebSocket consumer
+│   │   ├── common/         # Centralized API response envelope & exception handler
+│   │   ├── messages/       # Messages, attachments, read receipts, service layer
+│   │   └── users/          # User profiles, avatar uploads, user directory
+│   ├── config/             # Django settings, URLs, ASGI/WebSocket routing
+│   └── manage.py
 ├── frontend/
-│   ├── src/
-│   ├── package.json
-│   ├── vite.config.js
-│   ├── Dockerfile
-│   └── .env.example
-├── docs/
-│   ├── api.md
-│   ├── architecture.md
-│   ├── database.md
-│   └── ...
-├── docker-compose.yml
-├── README.md
-└── .gitignore
+│   └── src/
+│       ├── components/     # ChatWindow, ConversationSidebar, layout & UI primitives
+│       ├── context/        # AuthContext, ConversationContext, MessageContext, ThemeContext
+│       ├── hooks/          # Custom hooks (useUsers, useChat, useSocket)
+│       ├── pages/          # Login, Register, Home, Profile, Settings
+│       └── services/       # Axios API client (with JWT refresh interceptor) & WebSocket manager
+└── docs/                   # Detailed API, database, WebSocket, and architecture docs
 ```
 
-## Key Features
+- **Thin Views & Service Layer**: REST views validate input via serializers and delegate multi-step database writes to atomic service functions in `apps/messages/services.py`.
+- **Standardized API Envelope**: All responses and handled exceptions pass through `apps/common/responses.py` and `apps/common/exceptions.py`, returning `{ "success": bool, "message": str, "data" | "errors": ... }`.
 
-### Authentication and user accounts
-- Registration with username, email, and password validation
-- Login via username or email with JWT issuance
-- Refresh token rotation and logout token blacklist support
-- Current-user endpoint and authenticated access control
+---
 
-### Profile management
-- One-to-one user profile model with avatar, bio, and status message
-- Online/offline presence tracking
-- Last seen timestamps
+## Authentication
 
-### Conversation system
-- Private conversation creation between two users
-- Group conversation creation with multiple members
-- Active membership checks and conversation-level access control
-- Conversation deletion that deactivates only the current user membership
-- Chat-clearing support that hides prior messages without deleting the conversation
+1. **Login / Registration**: `POST /api/auth/login/` validates credentials (supporting case-insensitive username or email lookup) and returns a short-lived `access` JWT and a longer-lived `refresh` JWT.
+2. **Automatic Token Refresh**: The Axios response interceptor in `frontend/src/services/api.js` catches `401 Unauthorized` responses, queues concurrent requests, refreshes the access token via `POST /api/auth/refresh/`, and transparently retries the original requests.
+3. **Logout Blacklisting**: `POST /api/auth/logout/` blacklists the refresh token using `rest_framework_simplejwt.token_blacklist` so it cannot be reused.
 
-### Messaging features
-- Text messages with reply-to support
-- Message editing and soft-delete behavior
-- Read receipts per message and per-user status
-- Typing indicators in live chat
-- Attachment uploads for images, documents, audio, and video
-- Ordered conversation history and paginated message loading
+---
 
-### Real-time communication
-- WebSocket connection per conversation
-- Broadcasts for message creation, edits, deletes, read events, and presence updates
-- Django Channels in-memory channel layer for WebSocket event delivery
+## WebSocket Flow
 
-## Local Development
+1. **Connection & Authorization**: The client connects to `ws://<host>/ws/chat/<conversation_id>/?token=<access_jwt>`. `ChatConsumer.connect` authenticates the JWT and verifies that the user is an active member of `<conversation_id>` before accepting the connection.
+2. **Channel Groups**: Each connected socket subscribes to:
+   - `chat_<conversation_id>` — room-scoped events (`typing_start`, `typing_stop`, `message_read`, `chat_cleared`).
+   - `user_<user_id>` — user-scoped events (`new_message`, `message_edited`, `message_deleted`, `message_removed`, `conversation_created`, `conversation_deleted`), ensuring background conversations update their unread badges in real time.
+3. **Reconnection**: `frontend/src/services/websocket.js` automatically reconnects with exponential backoff on unexpected disconnects.
 
-### Prerequisites
-- Python 3.10+
-- Node.js 18+
-- PostgreSQL (recommended for production parity)
-- Docker Desktop (for the optional full-stack Compose setup)
+---
 
-### Backend setup
+## Database Relationships
 
-From the `backend/` directory:
+- **`User` ↔ `Profile` (`OneToOne`)**: Automatically provisioned via a `post_save` signal on `User`; stores `avatar`, `bio`, `status_message`, `is_online`, and `last_seen`.
+- **`Conversation` ↔ `ConversationMember` (`OneToMany`)**: Join table linking `User` and `Conversation` with a unique constraint on `(conversation, user)` and an `is_active` flag for per-user soft deletion.
+- **`Conversation` ↔ `Message` (`OneToMany`)**: Stores `sender`, `content`, `message_type`, self-referential `reply_to` (`SET_NULL`), `is_edited`, `is_deleted`, and `is_cleared`, indexed by `(conversation, created_at)`.
+- **`Message` ↔ `Attachment` (`OneToMany`)**: Stores file metadata, Cloudinary reference, and an optional unique `upload_id` UUID for idempotent upload retries.
+- **`Message` ↔ `MessageRead` (`OneToMany`)**: Tracks per-user read receipts with a unique constraint on `(message, user)`.
+
+---
+
+## Important Technical Decisions
+
+- **Soft-Delete & Membership Reactivation**: Deleting a conversation (`DELETE /api/conversations/<id>/delete/`) sets `ConversationMember.is_active = False` for the requesting user rather than deleting the shared `Conversation` row, preserving chat history for other participants. Starting a 1-on-1 chat again reactivates the membership instead of creating duplicate private conversations.
+- **Optimistic UI with Idempotent Media Retries**: Selecting and sending an attachment renders an immediate local `blob:` preview and generates a client UUID (`upload_id`). If the upload request times out and is retried, the backend deduplicates on `upload_id` to prevent duplicate database rows and Cloudinary uploads.
+- **Single-Delivery Broadcasts**: Message mutations broadcast to active members' `user_<id>` groups so each connected client receives the event once, whether viewing the active room or another conversation.
+
+---
+
+## Performance Considerations
+
+- **Eliminating N+1 Queries**: Conversation and message endpoints use `select_related('created_by', 'sender', 'sender__profile', 'reply_to', 'reply_to__sender')` and `prefetch_related('memberships__user__profile', 'attachments', 'read_receipts')`, plus database-level `Count` annotations for `member_count` and `unread_count`.
+- **Paginated Message History**: `GET /api/messages/<conversation_id>/` paginates messages (20 per page) and merges older pages into client state without discarding real-time or optimistic messages.
+- **On-Demand User Directory**: `useUsers` fetches user lists only when the New Chat or New Group modal is opened rather than on initial sidebar mount.
+
+---
+
+## Setup Instructions
+
+### 1. Backend
 
 ```bash
+cd chat-app/backend
 python -m venv .venv
-.\.venv\Scripts\activate
+# Windows PowerShell:
+.\.venv\Scripts\Activate.ps1
+# macOS / Linux:
+# source .venv/bin/activate
+
 pip install -r requirements.txt
+cp .env.example .env
 python manage.py migrate
 python manage.py runserver
 ```
 
-The backend uses environment variables such as:
+### 2. Frontend
 
 ```bash
-SECRET_KEY=your-secret-key
-DEBUG=True
-ALLOWED_HOSTS=localhost,127.0.0.1
-CORS_ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
-CSRF_TRUSTED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
-DATABASE_URL=postgresql://postgres@localhost:5432/nexus_chat_db
-CLOUDINARY_CLOUD_NAME=your_cloud_name
-CLOUDINARY_API_KEY=your_api_key
-CLOUDINARY_API_SECRET=your_api_secret
-```
-
-If `DATABASE_URL` is omitted, the app falls back to a local SQLite database. WebSocket events use Django Channels' in-memory layer. This supports the current single-process setup; events are not shared across multiple backend processes.
-
-### Frontend setup
-
-From the `frontend/` directory:
-
-```bash
+cd chat-app/frontend
 npm install
+cp .env.example .env
 npm run dev
 ```
 
-Set the frontend variables in a `.env` file:
+### 3. Running Checks & Tests
 
 ```bash
-VITE_API_BASE_URL=http://localhost:8000/api
-VITE_WS_BASE_URL=ws://localhost:8000
+# Backend checks & test suite (from chat-app/backend)
+python manage.py check
+python manage.py test
+
+# Frontend lint & build (from chat-app/frontend)
+npm run lint
+npm run build
 ```
 
-The example file is available at `frontend/.env.example`.
+---
 
-## Docker Setup
+## Future Improvements
 
-The repository includes a Docker Compose configuration for the full stack:
-
-```bash
-docker compose up --build
-```
-
-This starts:
-
-- `backend`: Django + Daphne ASGI server
-- `frontend`: Vite preview container
-- `db`: PostgreSQL
-
-## Deployment Notes
-
-The project is organized for deployment to:
-
-- Frontend: Vercel
-- Backend: Render
-- Database: PostgreSQL
-
-The Django configuration includes static file serving via Whitenoise and environment-based HTTP security settings. The current in-memory channel layer is intended for a single backend process and does not provide cross-process WebSocket coordination.
-
-## Documentation
-
-Additional project documentation is available in the `docs/` directory:
-
-- `docs/api.md` — API contract and endpoints
-- `docs/architecture.md` — system design and component structure
-- `docs/database.md` — relational schema and entity relationships
-- `docs/deployment.md` — deployment guidance
-- `docs/websocket.md` — live messaging flow
-
-## Notes
-
-This repository is a working chat application prototype with a real backend/frontend split, production-oriented configuration, and live message delivery. It is designed to be extended for additional features such as notifications, richer user presence, stronger moderation controls, and broader media handling.
+- **Redis Channel Layer (`channels-redis`)**: Replace `InMemoryChannelLayer` with `RedisChannelLayer` when scaling horizontally across multiple ASGI worker processes.
+- **Cursor-Based Pagination**: Migrate message history pagination from page-number offset to cursor pagination (`created_at` / `id`) for very large conversation histories.
+- **Full-Text Message Search**: Add PostgreSQL `SearchVector` indexing for server-side search across historical messages.

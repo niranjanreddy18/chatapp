@@ -13,7 +13,8 @@ ENV/
 
 # Django generated / runtime
 chat-app/backend/.env
-chat-app/backend/.env.example
+chat-app/backend/.env.local
+chat-app/backend/.env.*.local
 chat-app/backend/db.sqlite3
 *.sqlite3
 chat-app/backend/staticfiles/

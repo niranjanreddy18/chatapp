@@ -16,7 +16,7 @@
 - **Django REST Framework**: used for clean API serialization and validation.
 - **Django Channels**: added real-time chat support without changing the main backend.
 - **PostgreSQL**: selected as the production-grade relational database.
-- **Redis**: used for WebSocket channel layer and presence coordination.
+- **In-memory channel layer**: used by Django Channels for WebSocket event delivery in the current single-process setup.
 
 ## Why these decisions were chosen
 
@@ -24,7 +24,7 @@
 - DRF provides serializer-driven validation and reusable API patterns.
 - WebSockets are required for typing indicators and live message broadcasts.
 - PostgreSQL is more reliable than SQLite for concurrent production use.
-- Redis is the standard channel layer backend for Django Channels.
+- The in-memory channel layer keeps the current setup simple, but it does not coordinate events between multiple backend processes.
 
 ## Alternative approaches
 

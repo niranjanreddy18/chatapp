@@ -1,23 +1,27 @@
+import json
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
 from django.contrib.auth import get_user_model
 from django.db.models import Q
 from rest_framework import generics, status
 from rest_framework.permissions import IsAuthenticated
-from rest_framework.response import Response
 
+from apps.chats.models import ConversationMember
+from apps.common.responses import APIResponseMixin
 from .models import Profile
 from .serializers import ProfileSerializer, UpdateProfileSerializer, UserListSerializer
 
 User = get_user_model()
 
 
-class ProfileView(generics.GenericAPIView):
+class ProfileView(APIResponseMixin, generics.GenericAPIView):
     """Retrieve or update the authenticated user's profile."""
 
     permission_classes = [IsAuthenticated]
     serializer_class = ProfileSerializer
 
     def get_object(self):
-        profile, _ = Profile.objects.get_or_create(user=self.request.user)
+        profile, _ = Profile.objects.select_related('user').get_or_create(user=self.request.user)
         return profile
 
     def get(self, request, *args, **kwargs):
@@ -36,11 +40,6 @@ class ProfileView(generics.GenericAPIView):
 
         # Broadcast update to all active conversation channels so other online users see it in real-time
         try:
-            import json
-            from asgiref.sync import async_to_sync
-            from channels.layers import get_channel_layer
-            from apps.chats.models import ConversationMember
-
             channel_layer = get_channel_layer()
             if channel_layer:
                 conversation_ids = list(
@@ -62,7 +61,7 @@ class ProfileView(generics.GenericAPIView):
                         {
                             'type': 'chat.message',
                             'payload': payload,
-                        }
+                        },
                     )
         except Exception:
             pass
@@ -72,35 +71,21 @@ class ProfileView(generics.GenericAPIView):
     def patch(self, request, *args, **kwargs):
         return self.put(request, *args, **kwargs)
 
-    def _success_response(self, message, data=None, status_code=status.HTTP_200_OK):
-        payload = {'success': True, 'message': message}
-        if data is not None:
-            payload['data'] = data
-        return Response(payload, status=status_code)
 
-    def _error_response(self, message, errors=None, status_code=status.HTTP_400_BAD_REQUEST):
-        payload = {'success': False, 'message': message, 'errors': errors or {}}
-        return Response(payload, status=status_code)
-
-
-class UserListView(generics.ListAPIView):
+class UserListView(APIResponseMixin, generics.ListAPIView):
     """Return all users except the authenticated user, with optional search support."""
 
     permission_classes = [IsAuthenticated]
     serializer_class = UserListSerializer
 
     def get_queryset(self):
-        queryset = User.objects.exclude(pk=self.request.user.pk)
+        queryset = User.objects.select_related('profile').exclude(pk=self.request.user.pk)
 
         # ?exclude_existing=true → exclude users who already have an active
-        # private conversation with the current user (used by "Start Chat" modal
+        # private conversation with the current user (used by "Start Chat" modal)
         if self.request.query_params.get('exclude_existing', '').lower() == 'true':
-            from apps.chats.models import Conversation, ConversationMember
-
-            # Find IDs of all private conversations the current user is in
             existing_partner_ids = (
-                User.objects
-                .filter(
+                User.objects.filter(
                     conversation_memberships__conversation__conversation_type='PRIVATE',
                     conversation_memberships__is_active=True,
                     conversation_memberships__conversation__memberships__user=self.request.user,
@@ -121,9 +106,3 @@ class UserListView(generics.ListAPIView):
         queryset = self.get_queryset()
         serializer = self.get_serializer(queryset, many=True)
         return self._success_response('Users fetched successfully', serializer.data, status.HTTP_200_OK)
-
-    def _success_response(self, message, data=None, status_code=status.HTTP_200_OK):
-        payload = {'success': True, 'message': message}
-        if data is not None:
-            payload['data'] = data
-        return Response(payload, status=status_code)

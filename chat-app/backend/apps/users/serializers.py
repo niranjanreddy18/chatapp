@@ -5,6 +5,8 @@ from .models import Profile
 
 User = get_user_model()
 
+MAX_AVATAR_SIZE_BYTES = 5 * 1024 * 1024  # 5 MB
+
 
 class ProfileSerializer(serializers.ModelSerializer):
     """Serializer for returning a profile with user identity details."""
@@ -72,6 +74,11 @@ class UpdateProfileSerializer(serializers.ModelSerializer):
 
         if extension not in allowed_formats:
             raise serializers.ValidationError('Unsupported image format. Use JPG, PNG, or WEBP.')
+
+        file_size = getattr(value, 'size', 0)
+        if file_size and file_size > MAX_AVATAR_SIZE_BYTES:
+            raise serializers.ValidationError('Image file size must not exceed 5MB.')
+
         return value
 
     def update(self, instance, validated_data):
@@ -88,12 +95,6 @@ class UpdateProfileSerializer(serializers.ModelSerializer):
         return super().update(instance, validated_data)
 
 
-class CurrentUserProfileSerializer(ProfileSerializer):
-    """Alias serializer for the authenticated user's profile response."""
-
-    pass
-
-
 class UserListSerializer(serializers.ModelSerializer):
     """Serializer for listing users except the current user."""
 
@@ -105,13 +106,18 @@ class UserListSerializer(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         profile = getattr(instance, 'profile', None)
-        data = {
+        avatar_url = None
+        if profile and profile.avatar:
+            try:
+                avatar_url = profile.avatar.url
+            except Exception:
+                avatar_url = None
+        return {
             'id': instance.id,
             'username': instance.username,
             'email': instance.email,
-            'avatar': profile.avatar.url if profile and profile.avatar else None,
+            'avatar': avatar_url,
             'is_online': profile.is_online if profile else False,
             'bio': profile.bio if profile else '',
             'status_message': profile.status_message if profile else '',
         }
-        return data

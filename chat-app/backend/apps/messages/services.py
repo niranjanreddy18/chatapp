@@ -11,13 +11,15 @@ from django.db import transaction
 from django.utils import timezone
 from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 
-from apps.chats.models import ConversationMember
+from apps.chats.models import Conversation, ConversationMember
 
 from .models import Attachment, Message, MessageRead
 
 # ---------------------------------------------------------------------------
-# Allowed MIME types for file uploads
+# Allowed MIME types and size limits for file uploads
 # ---------------------------------------------------------------------------
+
+MAX_ATTACHMENT_SIZE_BYTES: int = 25 * 1024 * 1024  # 25 MB
 
 ALLOWED_MIME_TYPES: frozenset = frozenset({
     'image/jpeg',
@@ -66,9 +68,8 @@ def assert_is_member(user, conversation_id: int) -> None:
         raise PermissionDenied('You are not a member of this conversation.')
 
 
-def get_conversation_or_404(conversation_id: int):
+def get_conversation_or_404(conversation_id: int) -> Conversation:
     """Return the Conversation or raise NotFound."""
-    from apps.chats.models import Conversation
     try:
         return Conversation.objects.get(pk=conversation_id)
     except Conversation.DoesNotExist:
@@ -89,7 +90,8 @@ def send_message(
     message_type: str = Message.MessageType.TEXT,
 ) -> Message:
     """
-    Create and persist a new Message.
+    Create and persist a new Message, and bump the parent conversation's
+    `updated_at` timestamp so conversation lists sort by most recent activity.
 
     Validates:
     - The user is an active conversation member.
@@ -112,6 +114,7 @@ def send_message(
         message_type=message_type,
         reply_to=reply_to,
     )
+    Conversation.objects.filter(pk=conversation.pk).update(updated_at=message.created_at)
     return message
 
 
@@ -121,7 +124,7 @@ def mark_message_read(*, user, message_id: int) -> MessageRead:
     message = Message.objects.select_related('conversation').get(pk=message_id)
     assert_is_member(user, message.conversation_id)
 
-    read_receipt, created = MessageRead.objects.get_or_create(message=message, user=user)
+    read_receipt, _ = MessageRead.objects.get_or_create(message=message, user=user)
     return read_receipt
 
 
@@ -204,7 +207,7 @@ def remove_message(*, message: Message) -> int:
 @transaction.atomic
 def upload_attachment(*, message: Message, file, upload_id: str | None = None) -> Attachment:
     """
-    Validate the uploaded file's MIME type and create an Attachment record.
+    Validate the uploaded file's MIME type and size, and create an Attachment record.
 
     The physical file is saved to Cloudinary via MediaCloudinaryStorage.
 
@@ -220,13 +223,19 @@ def upload_attachment(*, message: Message, file, upload_id: str | None = None) -
     duplicate Cloudinary assets.
 
     If *upload_id* is absent (e.g. the edit-message upload path) the function
-    behaves exactly as before: validate → Cloudinary → INSERT.
+    behaves as: validate → Cloudinary → INSERT.
     """
     if upload_id:
         try:
             return Attachment.objects.get(upload_id=upload_id)
         except Attachment.DoesNotExist:
-            pass   # first attempt — fall through to create
+            pass  # first attempt — fall through to create
+
+    file_size = getattr(file, 'size', 0) or 0
+    if file_size > MAX_ATTACHMENT_SIZE_BYTES:
+        raise ValidationError({
+            'file': 'Attachment size exceeds the maximum allowed size of 25 MB.'
+        })
 
     raw_content_type = getattr(file, 'content_type', '')
     content_type = raw_content_type.split(';')[0].strip().lower() if raw_content_type else ''
@@ -242,9 +251,8 @@ def upload_attachment(*, message: Message, file, upload_id: str | None = None) -
         message=message,
         file=file,
         file_name=file.name,
-        file_size=file.size,
+        file_size=file_size,
         file_type=content_type,
-        upload_id=upload_id,   # None for legacy paths; UUID for compose-bar path
+        upload_id=upload_id,
     )
     return attachment
-

@@ -1,4 +1,4 @@
-import { ArrowLeft, Moon, Sun, Monitor, User, Mail, Sparkles, FileText, Pencil, LogOut, Check, ChevronRight } from 'lucide-react';
+import { ArrowLeft, Moon, Sun, Monitor, User, Pencil, LogOut, Check, ChevronRight } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import MainLayout from '../components/layout/MainLayout';
 import { useAuth } from '../context/AuthContext';
@@ -9,7 +9,7 @@ import Button from '../components/common/Button';
 function Settings() {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
-  const { theme, themeMode, setThemeMode } = useTheme();
+  const { themeMode, setThemeMode } = useTheme();
 
   const themeOptions = [
     {
@@ -133,7 +133,6 @@ function Settings() {
               </p>
             </div>
 
-            {/* Theme Selector Cards */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
               {themeOptions.map((opt) => {
                 const Icon = opt.icon;

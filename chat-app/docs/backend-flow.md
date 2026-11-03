@@ -16,7 +16,9 @@ The stack is built around:
 - Django REST Framework for API endpoints.
 - SimpleJWT for access and refresh tokens.
 - Channels for asynchronous WebSocket support.
-- SQLite by default, with optional Redis-backed channel layers for production-like deployments.
+- SQLite by default and Django Channels' in-memory channel layer for WebSocket events.
+
+The in-memory channel layer is suitable for a single backend process. It does not coordinate events between multiple backend processes.
 
 ## 2. High-level architecture
 

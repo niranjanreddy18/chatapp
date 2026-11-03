@@ -2,8 +2,8 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends build-essential libpq-dev \
@@ -14,10 +14,14 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# Ensure entrypoint is executable in the image (also set executable bit in git)
-RUN chmod +x /app/entrypoint.sh || true
+RUN sed -i 's/\r$//' /app/entrypoint.sh \
+    && chmod +x /app/entrypoint.sh \
+    && mkdir -p /app/staticfiles /app/media \
+    && adduser --disabled-password --gecos "" appuser \
+    && chown -R appuser:appuser /app
+
+USER appuser
 
 EXPOSE 8000
 
-# Use the entrypoint to run migrations, collectstatic, and start Daphne
 ENTRYPOINT ["/app/entrypoint.sh"]

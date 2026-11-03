@@ -5,7 +5,7 @@ from urllib.parse import parse_qs
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 from django.utils import timezone
-from rest_framework.exceptions import ValidationError as DRFValidationError
+from rest_framework.exceptions import PermissionDenied, ValidationError as DRFValidationError
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.exceptions import AuthenticationFailed, InvalidToken
 
@@ -13,7 +13,7 @@ from apps.chats.models import ConversationMember
 from apps.messages import services as message_services
 from apps.messages.models import Message
 from apps.messages.serializers import MessageSerializer, SendMessageSerializer
-from apps.messages.services import mark_message_read, mark_conversation_read
+from apps.messages.services import mark_conversation_read, mark_message_read
 from apps.users.models import Profile
 
 logger = logging.getLogger(__name__)
@@ -83,23 +83,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
         if event_type == 'send_message':
             serializer = SendMessageSerializer(data=payload)
         elif event_type == 'typing_start':
-            print(
-                f'[TYPING BACKEND RECEIVED] type={event_type} '
-                f'conversation_id={self.conversation_id} '
-                f'user_id={self.user.id} username={self.user.username} '
-                f'is_typing_flag={getattr(self, "is_typing", False)}',
-                flush=True,
-            )
             await self.handle_typing_start()
             return
         elif event_type == 'typing_stop':
-            print(
-                f'[TYPING BACKEND RECEIVED] type={event_type} '
-                f'conversation_id={self.conversation_id} '
-                f'user_id={self.user.id} username={self.user.username} '
-                f'is_typing_flag={getattr(self, "is_typing", False)}',
-                flush=True,
-            )
             await self.handle_typing_stop()
             return
         elif event_type == 'read_message':
@@ -135,6 +121,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 conversation_id=validated['conversation_id'],
                 content=validated['content'],
                 reply_to_id=validated.get('reply_to'),
+                message_type=validated.get('message_type', Message.MessageType.TEXT),
             )
         except DRFValidationError as exc:
             await self.send(text_data=json.dumps({
@@ -142,7 +129,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 'message': str(exc.detail),
             }))
             return
-        except PermissionError:
+        except (PermissionError, PermissionDenied):
             await self.send(text_data=json.dumps({
                 'type': 'error',
                 'message': 'You are not a member of this conversation.',
@@ -173,11 +160,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
         }))
 
     async def conversation_deleted(self, event):
-        """
-        Fired when a member deletes (deactivates their membership in) a
-        conversation.  Forwards the event to the connected browser so the
-        frontend can remove the conversation from the list in real-time.
-        """
         await self.send(text_data=json.dumps({
             'type': 'conversation_deleted',
             'conversation_id': event['conversation_id'],
@@ -185,11 +167,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
         }))
 
     async def chat_cleared(self, event):
-        """
-        Fired when any member clears all messages in a conversation.
-        Forwards the event to the connected browser so the frontend can
-        empty its message list in real-time.
-        """
         await self.send(text_data=json.dumps({
             'type': 'chat_cleared',
             'conversation_id': event['conversation_id'],
@@ -197,11 +174,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
         }))
 
     async def message_deleted(self, event):
-        """
-        Fired when a message is soft-deleted.
-        Forwards the event to the connected browser so the frontend can
-        update the deleted message in real-time.
-        """
         await self.send(text_data=json.dumps({
             'type': 'message_deleted',
             'message_id': event['message_id'],
@@ -210,11 +182,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
         }))
 
     async def message_edited(self, event):
-        """
-        Fired when a message is edited.
-        Forwards the event to the connected browser so the frontend can
-        update the message content in real-time.
-        """
         await self.send(text_data=json.dumps({
             'type': 'message_edited',
             'message_id': event['message_id'],
@@ -224,24 +191,12 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
     async def handle_typing_start(self):
         if getattr(self, 'is_typing', False):
-            # Dedup guard: already broadcasting — no repeat needed
-            print(
-                f'[TYPING BACKEND] handle_typing_start SKIPPED (already typing) '
-                f'user_id={self.user.id}',
-                flush=True,
-            )
             return
         self.is_typing = True
         await self.typing_start()
 
     async def handle_typing_stop(self):
         if not getattr(self, 'is_typing', False):
-            # Dedup guard: was not typing — no stop needed
-            print(
-                f'[TYPING BACKEND] handle_typing_stop SKIPPED (not typing) '
-                f'user_id={self.user.id}',
-                flush=True,
-            )
             return
         self.is_typing = False
         await self.typing_stop()
@@ -253,12 +208,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
             'user_id': self.user.id,
             'username': self.user.username,
         })
-        print(
-            f'[TYPING BACKEND BROADCAST] type=typing_start '
-            f'conversation_id={self.conversation_id} user_id={self.user.id} '
-            f'username={self.user.username} group={self.room_group_name}',
-            flush=True,
-        )
         await self.channel_layer.group_send(self.room_group_name, {
             'type': 'chat.message',
             'payload': payload,
@@ -271,12 +220,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
             'user_id': self.user.id,
             'username': self.user.username,
         })
-        print(
-            f'[TYPING BACKEND BROADCAST] type=typing_stop '
-            f'conversation_id={self.conversation_id} user_id={self.user.id} '
-            f'username={self.user.username} group={self.room_group_name}',
-            flush=True,
-        )
         await self.channel_layer.group_send(self.room_group_name, {
             'type': 'chat.message',
             'payload': payload,
@@ -293,7 +236,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         except Message.DoesNotExist:
             await self.send(text_data=json.dumps({'type': 'error', 'message': 'Message not found.'}))
             return
-        except PermissionError:
+        except (PermissionError, PermissionDenied):
             await self.send(text_data=json.dumps({'type': 'error', 'message': 'You are not allowed to read this message.'}))
             return
 
@@ -316,9 +259,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
         try:
             marked_ids = await self._mark_conversation_read(conversation_id)
-        except PermissionError:
+        except (PermissionError, PermissionDenied):
             return
 
+        read_at_iso = timezone.now().isoformat()
         for mid in marked_ids:
             await self.channel_layer.group_send(self.room_group_name, {
                 'type': 'chat.message',
@@ -326,7 +270,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     'type': 'message_read',
                     'message_id': mid,
                     'user_id': self.user.id,
-                    'read_at': timezone.now().isoformat(),
+                    'read_at': read_at_iso,
                 }),
             })
 
@@ -340,7 +284,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
         should_update = profile.is_online != is_online
         if is_online is False:
-            should_update = should_update or profile.last_seen is None or profile.last_seen < timezone.now() - timezone.timedelta(minutes=1)
+            should_update = (
+                should_update
+                or profile.last_seen is None
+                or profile.last_seen < timezone.now() - timezone.timedelta(minutes=1)
+            )
 
         if not should_update:
             return
@@ -442,10 +390,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         return await database_sync_to_async(self._mark_message_read_sync)(message_id)
 
     def _mark_message_read_sync(self, message_id: int):
-        try:
-            message = Message.objects.select_related('conversation').get(pk=message_id)
-        except Message.DoesNotExist as exc:
-            raise Message.DoesNotExist from exc
+        message = Message.objects.select_related('conversation').get(pk=message_id)
 
         if not ConversationMember.objects.filter(
             conversation_id=message.conversation_id,
@@ -456,11 +401,19 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
         return mark_message_read(user=self.user, message_id=message_id)
 
-    async def _create_message(self, *, conversation_id: int, content: str, reply_to_id: int | None) -> Message:
+    async def _create_message(
+        self,
+        *,
+        conversation_id: int,
+        content: str,
+        reply_to_id: int | None,
+        message_type: str = Message.MessageType.TEXT,
+    ) -> Message:
         return await database_sync_to_async(self._create_message_sync)(
             conversation_id=conversation_id,
             content=content,
             reply_to_id=reply_to_id,
+            message_type=message_type,
         )
 
     async def _serialize_message(self, message: Message):
@@ -470,17 +423,23 @@ class ChatConsumer(AsyncWebsocketConsumer):
         serializer = MessageSerializer(message, context={'request': None})
         return serializer.data
 
-    def _create_message_sync(self, *, conversation_id: int, content: str, reply_to_id: int | None) -> Message:
+    def _create_message_sync(
+        self,
+        *,
+        conversation_id: int,
+        content: str,
+        reply_to_id: int | None,
+        message_type: str = Message.MessageType.TEXT,
+    ) -> Message:
         try:
             return message_services.send_message(
                 user=self.user,
                 conversation_id=conversation_id,
                 content=content,
                 reply_to_id=reply_to_id,
+                message_type=message_type,
             )
         except DRFValidationError:
             raise
-        except Exception as exc:
-            if 'member' in str(exc).lower() or 'not a member' in str(exc).lower():
-                raise PermissionError(str(exc)) from exc
-            raise
+        except PermissionDenied as exc:
+            raise PermissionError(str(exc)) from exc

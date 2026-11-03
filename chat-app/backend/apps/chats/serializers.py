@@ -16,7 +16,18 @@ class ConversationMemberSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ConversationMember
-        fields = ('id', 'user_id', 'username', 'email', 'avatar', 'bio', 'status_message', 'is_admin', 'is_active', 'joined_at')
+        fields = (
+            'id',
+            'user_id',
+            'username',
+            'email',
+            'avatar',
+            'bio',
+            'status_message',
+            'is_admin',
+            'is_active',
+            'joined_at',
+        )
 
     def get_avatar(self, obj):
         profile = getattr(obj.user, 'profile', None)
@@ -39,23 +50,20 @@ class ConversationMemberSerializer(serializers.ModelSerializer):
         return profile.status_message if profile else ''
 
 
-class ConversationSerializer(serializers.ModelSerializer):
+class BaseConversationSerializer(serializers.ModelSerializer):
     members = ConversationMemberSerializer(source='memberships', many=True, read_only=True)
-    creator_id = serializers.IntegerField(source='created_by.id', read_only=True)
-    creator_username = serializers.CharField(source='created_by.username', read_only=True)
     member_count = serializers.SerializerMethodField()
     avatar = serializers.SerializerMethodField()
-
-    class Meta:
-        model = Conversation
-        fields = ('id', 'name', 'conversation_type', 'avatar', 'creator_id', 'creator_username', 'member_count', 'created_at', 'updated_at', 'members')
 
     def get_member_count(self, obj):
         return getattr(obj, 'member_count', obj.memberships.count())
 
     def get_avatar(self, obj):
-        if obj.conversation_type == 'GROUP':
-            return obj.avatar.url if obj.avatar else None
+        if obj.conversation_type == Conversation.ConversationType.GROUP:
+            try:
+                return obj.avatar.url if obj.avatar else None
+            except Exception:
+                return None
         request = self.context.get('request')
         current_user = request.user if request and request.user.is_authenticated else None
         for member in obj.memberships.all():
@@ -72,44 +80,50 @@ class ConversationSerializer(serializers.ModelSerializer):
         return None
 
 
-class ConversationListSerializer(serializers.ModelSerializer):
-    member_count = serializers.SerializerMethodField()
-    members = ConversationMemberSerializer(source='memberships', many=True, read_only=True)
-    unread_count = serializers.SerializerMethodField()
-    avatar = serializers.SerializerMethodField()
+class ConversationSerializer(BaseConversationSerializer):
+    creator_id = serializers.IntegerField(source='created_by.id', read_only=True)
+    creator_username = serializers.CharField(source='created_by.username', read_only=True)
 
     class Meta:
         model = Conversation
-        fields = ('id', 'name', 'conversation_type', 'avatar', 'member_count', 'members', 'unread_count', 'created_at', 'updated_at')
+        fields = (
+            'id',
+            'name',
+            'conversation_type',
+            'avatar',
+            'creator_id',
+            'creator_username',
+            'member_count',
+            'created_at',
+            'updated_at',
+            'members',
+        )
 
-    def get_member_count(self, obj):
-        return getattr(obj, 'member_count', obj.memberships.count())
+
+class ConversationListSerializer(BaseConversationSerializer):
+    unread_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Conversation
+        fields = (
+            'id',
+            'name',
+            'conversation_type',
+            'avatar',
+            'member_count',
+            'members',
+            'unread_count',
+            'created_at',
+            'updated_at',
+        )
 
     def get_unread_count(self, obj):
         return getattr(obj, 'unread_count', 0) or 0
 
-    def get_avatar(self, obj):
-        if obj.conversation_type == 'GROUP':
-            return obj.avatar.url if obj.avatar else None
-        request = self.context.get('request')
-        current_user = request.user if request and request.user.is_authenticated else None
-        for member in obj.memberships.all():
-            if current_user and member.user_id == current_user.id:
-                continue
-            profile = getattr(member.user, 'profile', None)
-            if profile and profile.avatar:
-                try:
-                    if request:
-                        return request.build_absolute_uri(profile.avatar.url)
-                    return profile.avatar.url
-                except Exception:
-                    return None
-        return None
-
 
 class ConversationCreateSerializer(serializers.Serializer):
     user_id = serializers.IntegerField(required=False, write_only=True)
-    name = serializers.CharField(required=False, allow_blank=False, write_only=True)
+    name = serializers.CharField(required=False, allow_blank=False, max_length=255, write_only=True)
     member_ids = serializers.ListField(child=serializers.IntegerField(), required=False, write_only=True)
 
     def validate(self, attrs):
@@ -130,13 +144,17 @@ class ConversationCreateSerializer(serializers.Serializer):
             return attrs
 
         if conversation_type == 'group':
-            name = attrs.get('name')
+            name = (attrs.get('name') or '').strip()
             if not name:
                 raise serializers.ValidationError({'name': 'Group name is required.'})
+            attrs['name'] = name
             member_ids = attrs.get('member_ids') or []
-            unique_member_ids = list(dict.fromkeys(member_ids))
+            unique_member_ids = [mid for mid in dict.fromkeys(member_ids) if mid != user.id]
             if len(unique_member_ids) < 2:
                 raise serializers.ValidationError({'member_ids': 'At least 2 members are required besides the creator.'})
+            existing_count = User.objects.filter(pk__in=unique_member_ids).count()
+            if existing_count != len(unique_member_ids):
+                raise serializers.ValidationError({'member_ids': 'One or more selected users do not exist.'})
             attrs['member_ids'] = unique_member_ids
             return attrs
 
@@ -148,8 +166,10 @@ class ConversationCreateSerializer(serializers.Serializer):
             conversation_type=Conversation.ConversationType.PRIVATE,
             created_by=user,
         )
-        ConversationMember.objects.create(conversation=conversation, user=user, is_admin=True)
-        ConversationMember.objects.create(conversation=conversation, user=target_user, is_admin=False)
+        ConversationMember.objects.bulk_create([
+            ConversationMember(conversation=conversation, user=user, is_admin=True),
+            ConversationMember(conversation=conversation, user=target_user, is_admin=False),
+        ])
         return conversation
 
     def create_group_conversation(self, user, name, member_ids):
@@ -158,9 +178,10 @@ class ConversationCreateSerializer(serializers.Serializer):
             conversation_type=Conversation.ConversationType.GROUP,
             created_by=user,
         )
-        ConversationMember.objects.create(conversation=conversation, user=user, is_admin=True)
+        memberships = [ConversationMember(conversation=conversation, user=user, is_admin=True)]
         for member_id in member_ids:
             if member_id == user.id:
                 continue
-            ConversationMember.objects.create(conversation=conversation, user_id=member_id, is_admin=False)
+            memberships.append(ConversationMember(conversation=conversation, user_id=member_id, is_admin=False))
+        ConversationMember.objects.bulk_create(memberships)
         return conversation

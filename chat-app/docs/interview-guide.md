@@ -8,7 +8,7 @@ It is designed for technical interview preparation and for explaining the projec
 ## Architecture
 
 1. What are the main layers of Nexus Chat?
-   - Answer: Frontend (React + Vite), backend (Django + DRF + Channels), database (PostgreSQL), and Redis.
+   - Answer: Frontend (React + Vite), backend (Django + DRF + Channels), and a relational database (PostgreSQL in Docker Compose).
 
 2. Why separate frontend and backend?
    - Answer: It decouples UI from API, enables independent deployment, and makes the architecture more scalable.
@@ -73,22 +73,22 @@ It is designed for technical interview preparation and for explaining the projec
 20. How is read receipt handled?
     - Answer: The client sends `read_message`, and the server saves a `MessageRead` row.
 
-## Redis
+## Channel layer
 
-21. Why use Redis with Django Channels?
-    - Answer: Redis provides channel layer support for multi-process WebSocket coordination.
+21. Which channel layer does the project currently use?
+    - Answer: Django Channels' in-memory layer.
 
 22. What does `CHANNEL_LAYERS` configure?
-    - Answer: The backend transport used for inter-process messaging.
+    - Answer: The backend used to send events between WebSocket consumers.
 
-23. Is Redis required for local development?
-    - Answer: Not strictly, but it is required for a production-like Channels setup.
+23. What is a limitation of the in-memory channel layer?
+    - Answer: Events are local to one backend process and are not shared between multiple processes.
 
-24. What command configures Redis Cloud in production?
-    - Answer: Use `REDIS_URL` environment variable.
+24. Is the current channel layer suitable for multiple backend workers?
+    - Answer: No. The current in-memory setup is intended for a single backend process.
 
-25. How does Redis improve performance?
-    - Answer: It enables real-time events and decouples message dispatch from HTTP request handling.
+25. Where are messages persisted?
+    - Answer: In the configured relational database; the channel layer is used for real-time event delivery.
 
 ## Django
 
@@ -166,8 +166,8 @@ It is designed for technical interview preparation and for explaining the projec
 47. Why is `CompressedManifestStaticFilesStorage` useful?
     - Answer: It compresses assets and caches file names for better browser performance.
 
-48. How can the app scale WebSocket traffic?
-    - Answer: Redis channel layer and multiple ASGI workers support scaling.
+48. What must change before scaling WebSocket traffic across multiple workers?
+    - Answer: Use a shared Channels channel layer; the current in-memory layer does not share events across workers.
 
 49. What is the tradeoff of strong security headers?
     - Answer: They may require careful CORS and proxy configuration but improve protection.

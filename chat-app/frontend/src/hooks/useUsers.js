@@ -3,12 +3,12 @@
  *
  * Changed from auto-fetch-on-mount to explicit fetchUsers() to avoid
  * an unnecessary API call every time the sidebar renders. Callers
- * invoke fetchUsers() only when the New Chat modal opens.
+ * invoke fetchUsers() only when the New Chat or New Group modal opens.
  *
  * fetchUsers() is safe to call multiple times — it will not fire a
  * second request while one is already in flight.
  */
-import { useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import api from '../services/api';
 
@@ -19,20 +19,19 @@ export function useUsers() {
   const inFlight = useRef(false);
 
   /**
-   * Fetch all users from GET /api/users/ and cache them in state.
-   * Subsequent calls while a request is in-flight are no-ops.
+   * Fetch users from GET /api/users/ and cache them in state.
+   * When `excludeExisting` is true (default), filters out users who already
+   * have an active private conversation with the current user.
    */
-  const fetchUsers = async () => {
+  const fetchUsers = useCallback(async ({ excludeExisting = true } = {}) => {
     if (inFlight.current) return;
     inFlight.current = true;
     setLoading(true);
     setError(null);
 
     try {
-      // exclude_existing=true → backend filters out users who already have
-      // an active private conversation with the current user so the modal
-      // only shows people you haven't chatted with yet.
-      const response = await api.get('/users/?exclude_existing=true');
+      const endpoint = excludeExisting ? '/users/?exclude_existing=true' : '/users/';
+      const response = await api.get(endpoint);
       setUsers(response?.data?.data || []);
     } catch {
       setError('Unable to load users.');
@@ -41,18 +40,18 @@ export function useUsers() {
       setLoading(false);
       inFlight.current = false;
     }
-  };
+  }, []);
 
   /**
    * Reset state so the next modal open re-fetches a fresh list.
    * Call this when the modal closes.
    */
-  const resetUsers = () => {
+  const resetUsers = useCallback(() => {
     setUsers([]);
     setError(null);
     setLoading(false);
     inFlight.current = false;
-  };
+  }, []);
 
   return { users, loading, error, fetchUsers, resetUsers };
 }

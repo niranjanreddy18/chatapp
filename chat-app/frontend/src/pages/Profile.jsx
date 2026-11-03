@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { ArrowLeft, Camera, Trash2, User, Mail, Sparkles, FileText, Check, LoaderCircle, AlertCircle, RefreshCw } from 'lucide-react';
+import { ArrowLeft, Camera, Trash2, User, Mail, Sparkles, FileText, Check, LoaderCircle, AlertCircle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import MainLayout from '../components/layout/MainLayout';
@@ -43,17 +43,10 @@ function Profile() {
           setStatusMessage(profileData.status_message || '');
           setBio(profileData.bio || '');
           setEmail(profileData.email || '');
-          // Sync with AuthContext user
           updateUser(profileData);
         }
       } catch {
         // Fallback to existing auth user state if offline
-        if (isMounted && user) {
-          setUsername(user.username || '');
-          setStatusMessage(user.status_message || '');
-          setBio(user.bio || '');
-          setEmail(user.email || '');
-        }
       } finally {
         if (isMounted) setLoadingProfile(false);
       }
@@ -63,7 +56,7 @@ function Profile() {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [updateUser]);
 
   // Cleanup object URL preview on unmount or change
   useEffect(() => {
@@ -79,7 +72,6 @@ function Profile() {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Validate format
     const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/jpg'];
     if (!allowedTypes.includes(file.type)) {
       setErrors((prev) => ({
@@ -89,7 +81,6 @@ function Profile() {
       return;
     }
 
-    // Validate size (max 5MB)
     if (file.size > 5 * 1024 * 1024) {
       setErrors((prev) => ({
         ...prev,
@@ -98,7 +89,6 @@ function Profile() {
       return;
     }
 
-    // Clear avatar error
     setErrors((prev) => {
       const next = { ...prev };
       delete next.avatar;
@@ -123,12 +113,10 @@ function Profile() {
     }
   };
 
-  // Determine which avatar source to display in preview
   const currentAvatarSrc = removeAvatar
     ? null
     : avatarPreview || user?.avatar || null;
 
-  // Handle Form Submission
   const handleSubmit = async (e) => {
     e.preventDefault();
     setGeneralError('');
@@ -173,18 +161,14 @@ function Profile() {
 
       if (response?.success) {
         const updatedData = response.data;
-        // Update global user context immediately
         updateUser(updatedData);
-        // Refresh server auth state
         await refreshAuthState();
 
-        // Reset file staging state
         setAvatarFile(null);
         setRemoveAvatar(false);
         setAvatarPreview(null);
 
         toast.success('Profile updated successfully!');
-        // Navigate back to settings
         navigate('/settings');
       } else {
         setGeneralError(response?.message || 'Failed to update profile.');
