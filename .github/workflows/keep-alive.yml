@@ -1,0 +1,15 @@
+name: Keep Render backend alive
+
+on:
+  schedule:
+    - cron: "*/3 * * * *"
+  workflow_dispatch:
+
+jobs:
+  health-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Render backend health
+        env:
+          RENDER_HEALTH_URL: https://nexuschat-rwlk.onrender.com/api/health/
+        run: curl -f --max-time 30 "$RENDER_HEALTH_URL"
