@@ -35,4 +35,5 @@ class HealthCheckView(APIView):
     renderer_classes = (JSONRenderer,)
 
     def get(self, request, *args, **kwargs):
+        print("✅ Health check successful")
         return Response({'status': 'ok'}, status=status.HTTP_200_OK)
