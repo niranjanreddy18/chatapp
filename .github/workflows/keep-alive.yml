@@ -8,8 +8,21 @@ on:
 jobs:
   health-check:
     runs-on: ubuntu-latest
+
     steps:
       - name: Check Render backend health
         env:
           RENDER_HEALTH_URL: https://nexuschat-rwlk.onrender.com/api/health/
-        run: curl -f --max-time 30 "$RENDER_HEALTH_URL"
+        run: |
+          echo "🏥 Sending health check to Render..."
+          echo "🌐 URL: $RENDER_HEALTH_URL"
+
+          curl -f \
+            --connect-timeout 15 \
+            --max-time 30 \
+            --retry 3 \
+            --retry-delay 5 \
+            --retry-all-errors \
+            "$RENDER_HEALTH_URL"
+
+          echo "✅ Health check successful"
